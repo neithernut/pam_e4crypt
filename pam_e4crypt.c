@@ -25,10 +25,14 @@
 #include <ext2fs/ext2fs.h>
 
 // library includes
+#include <openssl/sha.h>
 #include <uuid/uuid.h>
 
 // PAM includes
 #include <security/pam_modules.h>
+
+
+#define SHA512_LENGTH 64
 
 
 #ifndef EXT4_IOC_GET_ENCRYPTION_PWSALT
@@ -258,6 +262,100 @@ salt_destroy(
     free(salt->salt);
     salt->salt = NULL;
     salt->salt_len = 0;
+}
+
+
+
+
+/**
+ * Supposed pbkdf2_sha512 implementation
+ *
+ * Originally ripped from e4crypt
+ */
+static
+int
+pbkdf2_sha512(
+        const char *passphrase, ///< passphrase to encode
+        struct salt *salt, ///< salt to use for encoding
+        unsigned int count, ///< count of cycles to perform
+        unsigned char derived_key[EXT4_MAX_KEY_SIZE] ///< output
+) {
+    // TODO: maybe "clean up"?
+    size_t passphrase_size = strlen(passphrase);
+    unsigned char buf[SHA512_LENGTH + EXT4_MAX_PASSPHRASE_SIZE] = {0};
+    unsigned char tempbuf[SHA512_LENGTH] = {0};
+    char final[SHA512_LENGTH] = {0};
+    unsigned char saltbuf[EXT4_MAX_SALT_SIZE + EXT4_MAX_PASSPHRASE_SIZE] = {0};
+    int actual_buf_len = SHA512_LENGTH + passphrase_size;
+    int actual_saltbuf_len = EXT4_MAX_SALT_SIZE + passphrase_size;
+    unsigned int x, y;
+    __u32 *final_u32 = (__u32 *)final;
+    __u32 *temp_u32 = (__u32 *)tempbuf;
+
+#if 0
+    // TODO: error out properly
+    if (passphrase_size > EXT4_MAX_PASSPHRASE_SIZE) {
+        printf("Passphrase size is %zd; max is %d.\n", passphrase_size,
+               EXT4_MAX_PASSPHRASE_SIZE);
+        exit(1);
+    }
+    if (salt->salt_len > EXT4_MAX_SALT_SIZE) {
+        printf("Salt size is %zd; max is %d.\n", salt->salt_len,
+               EXT4_MAX_SALT_SIZE);
+        exit(1);
+    }
+    assert(EXT4_MAX_KEY_SIZE <= SHA512_LENGTH);
+#endif
+
+    memcpy(saltbuf, salt->salt, salt->salt_len);
+    memcpy(&saltbuf[EXT4_MAX_SALT_SIZE], passphrase, passphrase_size);
+
+    memcpy(&buf[SHA512_LENGTH], passphrase, passphrase_size);
+
+    for (x = 0; x < count; ++x) {
+        if (x == 0) {
+            SHA512(saltbuf, actual_saltbuf_len, tempbuf);
+        } else {
+            /*
+             * buf: [previous hash || passphrase]
+             */
+            memcpy(buf, tempbuf, SHA512_LENGTH);
+            SHA512(buf, actual_buf_len, tempbuf);
+        }
+        for (y = 0; y < (sizeof(final) / sizeof(*final_u32)); ++y)
+            final_u32[y] = final_u32[y] ^ temp_u32[y];
+    }
+
+    memcpy(derived_key, final, EXT4_MAX_KEY_SIZE);
+
+    return PAM_SUCCESS;
+}
+
+
+/**
+ * Generate a ref string from a key
+ *
+ * Originally ripped from e4crypt
+ */
+static
+void
+generate_key_ref_str(
+        char* key_ref_str, //!< output pointer
+        struct ext4_encryption_key* key //!< key for which to generate the ref
+) {
+    // TODO: maybe "clean up"?
+    unsigned char key_ref1[SHA512_LENGTH];
+    unsigned char key_ref2[SHA512_LENGTH];
+    unsigned char key_desc[EXT4_KEY_DESCRIPTOR_SIZE];
+    int x;
+
+    SHA512(key->raw, EXT4_MAX_KEY_SIZE, key_ref1);
+    SHA512(key_ref1, SHA512_LENGTH, key_ref2);
+    memcpy(key_desc, key_ref2, EXT4_KEY_DESCRIPTOR_SIZE);
+    for (x = 0; x < EXT4_KEY_DESCRIPTOR_SIZE; ++x) {
+        sprintf(&key_ref_str[x * 2], "%02x", key_desc[x]);
+    }
+    key_ref_str[EXT4_KEY_REF_STR_BUF_SIZE - 1] = '\0';
 }
 
 
