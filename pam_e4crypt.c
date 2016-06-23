@@ -14,7 +14,13 @@
 #define PAM_SM_SESSION
 
 // std and system includes
+#include <string.h>
+#include <unistd.h>
 #include <syslog.h>
+
+// ext4 specific includes
+#include <ext2fs/ext2_fs.h>
+#include <ext2fs/ext2fs.h>
 
 // PAM includes
 #include <security/pam_modules.h>
@@ -27,6 +33,113 @@
  */
 #define pam_log(level, ...) do { if (~flags & PAM_SILENT) \
         syslog(level, "pam_e4crypt: " __VA_ARGS__); } while (0)
+
+
+
+
+/**
+ * Encryption key list
+ *
+ * This struct implements a simple stack containing encryptoin keys.
+ */
+struct key_list {
+    struct ext4_encryption_key* data; ///< pointer to the array of keys held
+    size_t count; ///< number of keys in the list
+};
+
+
+/**
+ * Initialize a key list
+ */
+static
+void
+key_list_init(
+        struct key_list* list ///< key list to initialize
+) {
+    list->data = NULL;
+    list->count = 0;
+}
+
+
+/**
+ * Free all resources associated with a key list
+ *
+ * The key list is reset (e.g. re-initialized)
+ */
+static
+void
+key_list_destroy(
+        struct key_list* list ///< key list to destroy
+) {
+    free(list->data);
+    key_list_init(list);
+}
+
+
+/**
+ * Allocate room for one more key
+ *
+ * @returns a pointer to the key allocated or `NULL`, if the allocation failed.
+ */
+static
+struct ext4_encryption_key*
+key_list_alloc_key(
+        struct key_list* list ///< key list in which to allocate a key
+) {
+    size_t current_pos = list->count;
+    ++(list->count);
+
+    // we resize whenever we hit a power of 2
+    int need_resize = 1;
+    for (size_t size = list->count; size > 1; size >>= 1)
+        if (size & 1) {
+            need_resize = 0;
+            break;
+        }
+
+    if (need_resize) {
+        struct ext4_encryption_key* tmp;
+        tmp = realloc(list->data, sizeof(struct ext4_encryption_key) * list->count * 2);
+        if (!tmp)
+            return NULL;
+        list->data = tmp;
+    }
+
+    return list->data + current_pos;
+}
+
+
+/**
+ * Pop a key from the stack
+ */
+static
+void
+key_list_pop(
+        struct key_list* list ///< key list from which to pop a key
+) {
+    if (list->count > 0)
+        --list->count;
+}
+
+
+/**
+ * Cleanup function for keylists given to PAM
+ *
+ * This function destroys and frees a key-list.
+ * Only use if the key list itself was allocated with `malloc()`
+ */
+static
+void
+key_list_pam_cleanup(
+    pam_handle_t* pamh,
+    void* data,
+    int error_status
+) {
+    if (!data)
+        return;
+    key_list_destroy((struct key_list*) data);
+    free(data);
+}
 
 
 
