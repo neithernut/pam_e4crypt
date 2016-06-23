@@ -13,8 +13,20 @@
 #define PAM_SM_AUTH
 #define PAM_SM_SESSION
 
+// std and system includes
+#include <syslog.h>
+
 // PAM includes
 #include <security/pam_modules.h>
+
+
+/**
+ * Log honoring the silent flag
+ *
+ * Use like syslog, but only if the variable `flags` is around.
+ */
+#define pam_log(level, ...) do { if (~flags & PAM_SILENT) \
+        syslog(level, "pam_e4crypt: " __VA_ARGS__); } while (0)
 
 
 
