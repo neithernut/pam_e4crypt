@@ -14,7 +14,9 @@
 #define PAM_SM_SESSION
 
 // std and system includes
+#include <fcntl.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 #include <syslog.h>
 
@@ -22,8 +24,16 @@
 #include <ext2fs/ext2_fs.h>
 #include <ext2fs/ext2fs.h>
 
+// library includes
+#include <uuid/uuid.h>
+
 // PAM includes
 #include <security/pam_modules.h>
+
+
+#ifndef EXT4_IOC_GET_ENCRYPTION_PWSALT
+#define EXT4_IOC_GET_ENCRYPTION_PWSALT	_IOW('f', 20, __u8[16])
+#endif
 
 
 /**
@@ -33,6 +43,15 @@
  */
 #define pam_log(level, ...) do { if (~flags & PAM_SILENT) \
         syslog(level, "pam_e4crypt: " __VA_ARGS__); } while (0)
+
+
+
+
+/**
+ * Hexadecimal characters
+ */
+static const unsigned char *hexchars = (const unsigned char *) "0123456789abcdef";
+static const size_t hexchars_size = 16;
 
 
 
@@ -139,6 +158,106 @@ key_list_pam_cleanup(
         return;
     key_list_destroy((struct key_list*) data);
     free(data);
+}
+
+
+
+
+/**
+ * Salt to use for cryptographic purposes
+ *
+ * Salt is considered empty/void if `salt` or `salt_len` is 0.
+ */
+struct salt {
+    unsigned char *salt; ///< pointer to the actual salt
+    size_t salt_len; ///< length of the salt in bytes
+};
+
+
+/**
+ * Parse a salt string
+ *
+ * @returns a salt parsed from the salt string
+ *
+ * Originally ripped from e4crypt
+ */
+static
+struct salt
+salt_parse(
+    char *salt_str ///< salt string to parse
+) {
+    struct salt retval = {NULL, 0};
+
+    // TODO: clean up! (e.g. by throwing out PARSE_FLAGS_FORCE_FN)
+    unsigned char buf[EXT4_MAX_SALT_SIZE];
+    char *cp = salt_str;
+    int fd, ret, salt_len = 0;
+
+    if (strncmp(cp, "s:", 2) == 0) {
+        cp += 2;
+        salt_len = strlen(cp);
+        if (salt_len >= EXT4_MAX_SALT_SIZE)
+            return retval;
+        strncpy((char *) buf, cp, sizeof(buf));
+    } else if (cp[0] == '/') {
+    salt_from_filename:
+        fd = open(cp, O_RDONLY | O_DIRECTORY);
+        if (fd == -1 && errno == ENOTDIR)
+            fd = open(cp, O_RDONLY);
+        if (fd == -1)
+            return retval;
+        ret = ioctl(fd, EXT4_IOC_GET_ENCRYPTION_PWSALT, &buf);
+        close(fd);
+        if (ret < 0)
+            return retval;
+
+        salt_len = 16;
+    } else if (strncmp(cp, "f:", 2) == 0) {
+        cp += 2;
+        goto salt_from_filename;
+    } else if (strncmp(cp, "0x", 2) == 0) {
+        unsigned char *h, *l;
+
+        cp += 2;
+        if (strlen(cp) & 1)
+            return retval;
+        while (*cp) {
+            if (salt_len >= EXT4_MAX_SALT_SIZE)
+                return retval;
+            h = memchr(hexchars, *cp++, hexchars_size);
+            l = memchr(hexchars, *cp++, hexchars_size);
+            if (!h || !l)
+                return retval;
+            buf[salt_len++] =
+                (((unsigned char)(h - hexchars) << 4) +
+                 (unsigned char)(l - hexchars));
+        }
+    } else if (uuid_parse(cp, buf) == 0) {
+        salt_len = 16;
+    } else
+        return retval;
+
+    retval.salt = malloc(salt_len);
+    if (retval.salt) {
+        memcpy(retval.salt, buf, salt_len);
+        retval.salt_len = salt_len;
+    }
+
+    return retval;
+}
+
+
+/**
+ * Free all resources associated with a salt
+ */
+static
+void
+salt_destroy(
+        struct salt* salt ///< salt to destroy
+) {
+    free(salt->salt);
+    salt->salt = NULL;
+    salt->salt_len = 0;
 }
 
 
