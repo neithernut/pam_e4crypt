@@ -15,6 +15,7 @@
 
 // std and system includes
 #include <fcntl.h>
+#include <mntent.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -33,6 +34,7 @@
 
 
 #define SHA512_LENGTH 64
+#define PAM_E4CRYPT_KEY_DATA "pam_e4crypt_key_data"
 
 
 #ifndef EXT4_IOC_GET_ENCRYPTION_PWSALT
@@ -380,9 +382,68 @@ pam_sm_authenticate(
         int argc, ///< number of arguments passed to the module
         const char** argv ///< arguments passed to the module
 ) {
-    // TODO: get the authentication token
-    // TODO: create a key for each salt
-    // TODO: expose key list
+    int retval;
+
+    char* auth_token = NULL;
+    retval = pam_get_item(pamh, PAM_AUTHTOK, (const void**) &auth_token);
+    if ((retval != PAM_SUCCESS) || !auth_token) {
+        pam_log(LOG_ERR, "Failed to get auth token!");
+        return PAM_AUTH_ERR;
+    }
+
+    // we will use a key list for carrying the keys from the authentication
+    // phaase to the session setup phase
+    struct key_list* keys = malloc(sizeof(*keys));
+    if (!keys) {
+        pam_log(LOG_ERR, "Failed to allocate memory for the key list!");
+        return PAM_AUTH_ERR;
+    }
+    key_list_init(keys);
+    pam_set_data(pamh, PAM_E4CRYPT_KEY_DATA, keys, key_list_pam_cleanup);
+
+    // We have to generate a policy for each ext4 file system availible.
+    // Hence, we iterate over all mounted file systems and create a policy for
+    // each ext4 fs we find.
+    FILE* f = setmntent("/etc/mtab", "r");
+    struct mntent *mnt;
+    while (f && ((mnt = getmntent(f)) != NULL)) {
+        if (strcmp(mnt->mnt_type, "ext4") || access(mnt->mnt_dir, R_OK))
+            continue;
+
+        struct salt salt = salt_parse(mnt->mnt_dir);
+        if (!salt.salt) {
+            pam_log(LOG_WARNING, "No salt for mount '%s'", mnt->mnt_dir);
+            continue;
+        }
+
+        struct ext4_encryption_key* key = key_list_alloc_key(keys);
+        if (!key) {
+            pam_log(LOG_WARNING, "Could not allocate space for key!");
+            goto free_salt;
+        }
+        key->mode = EXT4_ENCRYPTION_MODE_AES_256_XTS;
+        key->size = EXT4_MAX_KEY_SIZE;
+
+        pam_log(LOG_NOTICE, "Generating key for mount '%s'", mnt->mnt_dir);
+        retval = pbkdf2_sha512(auth_token, &salt, EXT4_PBKDF2_ITERATIONS, key->raw);
+        if (retval != PAM_SUCCESS)
+            goto free_salt;
+
+        // avoid duplicates in the key list
+        {
+            struct ext4_encryption_key* current_key = key;
+            while (current_key-- > keys->data)
+                if (memcmp(current_key, key, sizeof(*key)) == 0) {
+                    key_list_pop(keys);
+                    pam_log(LOG_NOTICE, "Found duplicate key");
+                    goto free_salt;
+                }
+        }
+
+free_salt:
+        salt_destroy(&salt);
+    }
+    endmntent(f);
 
     return PAM_SUCCESS;
 }
