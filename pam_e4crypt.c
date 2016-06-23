@@ -17,9 +17,12 @@
 #include <fcntl.h>
 #include <mntent.h>
 #include <string.h>
+#include <sys/fsuid.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <syslog.h>
+
+#include <keyutils.h>
 
 // ext4 specific includes
 #include <ext2fs/ext2_fs.h>
@@ -31,8 +34,14 @@
 
 // PAM includes
 #include <security/pam_modules.h>
+#include <security/pam_modutil.h>
 
 
+// misc definitions -- originally ripped from e4crypt
+#define EXT4_KEY_REF_STR_BUF_SIZE ((EXT4_KEY_DESCRIPTOR_SIZE * 2) + 1)
+#define EXT2FS_KEY_TYPE_LOGON "logon"
+#define EXT2FS_KEY_DESC_PREFIX "ext4:"
+#define EXT2FS_KEY_DESC_PREFIX_SIZE 5
 #define SHA512_LENGTH 64
 #define PAM_E4CRYPT_KEY_DATA "pam_e4crypt_key_data"
 
@@ -485,8 +494,94 @@ pam_sm_open_session(
         int argc, ///< number of arguments passed to the module
         const char** argv ///< arguments passed to the module
 ) {
-    // TODO: get key list
-    // TODO: add keys to the session keyring
+    int retval;
+
+    // get the keys we are about to insert
+    struct key_list* keys = NULL;
+    retval = pam_get_data(pamh, PAM_E4CRYPT_KEY_DATA, (const void**) &keys);
+    if ((retval != PAM_SUCCESS) || !keys) {
+        pam_log(LOG_ERR, "Failed to retrieve key list!");
+        return PAM_SESSION_ERR;
+    }
+
+    const char *username;
+    retval = pam_get_item(pamh, PAM_USER, (void*) &username);
+    if (retval != PAM_SUCCESS)
+        return retval;
+
+    struct passwd const* pw = pam_modutil_getpwnam(pamh, username);
+    if (!pw) {
+        pam_log(LOG_ERR, "error looking up user");
+        return PAM_USER_UNKNOWN;
+    }
+
+    // We need to switch the real UID and GID to find the user session keyring.
+    // We also need to switch the FS UID and GID so the keys end up with the
+    // correct permission.
+    uid_t old_uid = getuid();
+    uid_t old_gid = getgid();
+
+    key_serial_t session_keyring = 0;
+
+    if ((old_gid != pw->pw_gid) && (retval = setregid(pw->pw_gid, -1)) < 0) {
+        pam_log(LOG_ERR, "Could not set GID: %s", strerror(errno));
+        return PAM_SESSION_ERR;
+    }
+
+    if ((old_uid != pw->pw_uid) && (retval = setreuid(pw->pw_uid, -1) < 0)) {
+        pam_log(LOG_ERR, "Could not set UID: %s", strerror(errno));
+        goto reset_gid;
+    }
+
+    if ((old_gid != pw->pw_gid) && (retval = setfsgid(pw->pw_gid)) < 0) {
+        pam_log(LOG_ERR, "Could not set FS GID: %s", strerror(errno));
+        goto reset_uid;
+    }
+
+    if ((old_uid != pw->pw_uid) && (retval = setfsuid(pw->pw_uid) < 0)) {
+        pam_log(LOG_ERR, "Could not set FS UID: %s", strerror(errno));
+        goto reset_fsgid;
+    }
+
+    struct ext4_encryption_key* ext4_key = keys->data + keys->count;
+    while (ext4_key-- > keys->data) {
+        char key_ref_str[EXT2FS_KEY_DESC_PREFIX_SIZE + EXT4_KEY_REF_STR_BUF_SIZE];
+        strcpy(key_ref_str, EXT2FS_KEY_DESC_PREFIX);
+        generate_key_ref_str(key_ref_str + EXT2FS_KEY_DESC_PREFIX_SIZE,
+                ext4_key);
+        pam_log(LOG_NOTICE, "Inserting key with reference %s as %d:%d",
+                key_ref_str, pw->pw_uid, pw->pw_gid);
+
+        key_serial_t key = add_key(EXT2FS_KEY_TYPE_LOGON, key_ref_str,
+                ext4_key, sizeof(*ext4_key), KEY_SPEC_SESSION_KEYRING);
+        if (key < 0) {
+            pam_log(LOG_ERR, "Could not add key: %s", strerror(errno));
+            continue;
+        }
+    }
+
+    if ((old_uid != pw->pw_uid) && (retval = setfsuid(old_uid) < 0)) {
+        pam_log(LOG_ERR, "Could not set GID: %s", strerror(errno));
+        session_keyring = 0;
+    }
+
+reset_fsgid:
+    if ((old_gid != pw->pw_gid) && (retval = setfsgid(old_gid)) < 0) {
+        pam_log(LOG_ERR, "Could not set UID: %s", strerror(errno));
+        session_keyring = 0;
+    }
+
+reset_uid:
+    if ((old_uid != pw->pw_uid) && (retval = setreuid(old_uid, -1) < 0)) {
+        pam_log(LOG_ERR, "Could not set GID: %s", strerror(errno));
+        session_keyring = 0;
+    }
+
+reset_gid:
+    if ((old_gid != pw->pw_gid) && (retval = setregid(old_gid, -1)) < 0) {
+        pam_log(LOG_ERR, "Could not set UID: %s", strerror(errno));
+        session_keyring = 0;
+    }
 
     return retval;
 }
