@@ -1,4 +1,6 @@
-= pam_e4crypt -- PAM module unlocking ext4 transparent encryption
+= pam_e4crypt
+
+This is a PAM module for unlocking transparently encrypted directories on ext4.
 
 Since version 4.1, the Linux kernel supports transparent encryption in ext4.  The
 mechanism relies on the keyrings facility of the kernel.
