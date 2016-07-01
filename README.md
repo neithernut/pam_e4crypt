@@ -84,8 +84,9 @@ file for more information. Also, you might want to consult a lawyer if you
 intend to ship this module together which a BSD-licensed version of PAM.
 
 The license was chosen because some code was cargo-culted from the e2fsprogs,
-which is licensed under the GPLv2. Maybe, one day, if all the affected functions
-are rewritten to a degree where they are legally re-implementations, none of the
+which was authored by Michael Halcrow and Ildar Muslukhov, copyrighted by Google
+and licensed under the GPLv2. Maybe, one day, if all the affected functions are
+rewritten to a degree where they are legally re-implementations, none of the
 eventual co-authors object and none of the dependencies switched to GPL-only,
 I'll re-release the thing under the LGPL or a BSD-license.
 
