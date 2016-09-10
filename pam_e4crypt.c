@@ -105,6 +105,7 @@ void
 key_list_destroy(
         struct key_list* list ///< key list to destroy
 ) {
+    memset(list->data, 0, sizeof(*(list->data)) * list->count);
     free(list->data);
     key_list_init(list);
 }
@@ -132,10 +133,14 @@ key_list_alloc_key(
         }
 
     if (need_resize) {
-        struct ext4_encryption_key* tmp;
-        tmp = realloc(list->data, sizeof(struct ext4_encryption_key) * list->count * 2);
+        // reallocate manually so we can clear the memory
+        size_t old_size = sizeof(struct ext4_encryption_key) * list->count;
+        struct ext4_encryption_key* tmp = malloc(old_size * 2);
         if (!tmp)
             return NULL;
+        memcpy(tmp, list->data, old_size);
+        memset(list->data, 0, old_size);
+        free(list->data);
         list->data = tmp;
     }
 
@@ -258,6 +263,8 @@ salt_parse(
         retval.salt_len = salt_len;
     }
 
+    memset(buf, 0, sizeof(buf));
+
     return retval;
 }
 
@@ -270,6 +277,7 @@ void
 salt_destroy(
         struct salt* salt ///< salt to destroy
 ) {
+    memset(salt->salt, 0, salt->salt_len);
     free(salt->salt);
     salt->salt = NULL;
     salt->salt_len = 0;
@@ -339,6 +347,11 @@ pbkdf2_sha512(
 
     memcpy(derived_key, final, EXT4_MAX_KEY_SIZE);
 
+    memset(buf, 0, sizeof(buf));
+    memset(tempbuf, 0, sizeof(tempbuf));
+    memset(final, 0, sizeof(final));
+    memset(saltbuf, 0, sizeof(saltbuf));
+
     return PAM_SUCCESS;
 }
 
@@ -367,6 +380,10 @@ generate_key_ref_str(
         sprintf(&key_ref_str[x * 2], "%02x", key_desc[x]);
     }
     key_ref_str[EXT4_KEY_REF_STR_BUF_SIZE - 1] = '\0';
+
+    memset(key_ref1, 0, sizeof(key_ref1));
+    memset(key_ref2, 0, sizeof(key_ref2));
+    memset(key_desc, 0, sizeof(key_desc));
 }
 
 
