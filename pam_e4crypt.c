@@ -21,6 +21,7 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <syslog.h>
+#include <limits.h>
 
 #include <keyutils.h>
 
@@ -436,6 +437,30 @@ free_salt:
     salt_destroy(&salt);
 }
 
+/**
+ * Read salt_data from file.
+ */
+static
+char*
+read_salt_data(
+        char* path
+) {
+    char* result = NULL;
+    int fd = open(path, O_RDONLY);
+    if (fd == -1) {
+        return result;
+    }
+    char buf[EXT4_MAX_SALT_SIZE + 2];
+    int nb = read(fd, buf, sizeof(buf));
+    close(fd);
+    if (nb >= 0) {
+        result = malloc(nb + 1);
+        memcpy(result, buf, nb);
+        result[nb] = '\0';
+        memset(buf, 0, sizeof(buf));
+    }
+    return result;
+}
 
 
 // PAM authentication module implementations
@@ -475,6 +500,24 @@ pam_sm_authenticate(
     }
     key_list_init(keys);
     pam_set_data(pamh, PAM_E4CRYPT_KEY_DATA, keys, key_list_pam_cleanup);
+
+    // First read a salt define in a fixed place in the HOME directory
+    const char *username;
+    retval = pam_get_item(pamh, PAM_USER, (void*) &username);
+    if (retval != PAM_SUCCESS)
+        return retval;
+    struct passwd const* pw = pam_modutil_getpwnam(pamh, username);
+    if (!pw) {
+        pam_log(LOG_ERR, "error looking up user");
+        return PAM_USER_UNKNOWN;
+    }
+    char path[PATH_MAX];
+    snprintf(path, PATH_MAX, "%s/%s", pw->pw_dir, ".ext4_encryption_salt");
+    char* salt_data = read_salt_data(path);
+    if (salt_data) {
+        generate_key(flags, salt_data, auth_token, keys);
+        free(salt_data);
+    }
 
     // We have to generate a policy for each ext4 file system availible.
     // Hence, we iterate over all mounted file systems and create a policy for
