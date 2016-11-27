@@ -390,6 +390,51 @@ generate_key_ref_str(
     memset(key_desc, 0, sizeof(key_desc));
 }
 
+/**
+ * Generate a key and store it into the list
+ */
+static
+void
+generate_key(
+        int pam_flags,
+        char* salt_data,
+        char* auth_token,
+        struct key_list* keys
+) {
+    int flags = pam_flags;
+    int retval = 0;
+    struct salt salt = salt_parse(salt_data);
+    if (!salt.salt) {
+        pam_log(LOG_WARNING, "Invalid salt data '%s'", salt_data);
+        return;
+    }
+    struct ext4_encryption_key* key = key_list_alloc_key(keys);
+    if (!key) {
+        pam_log(LOG_WARNING, "Could not allocate space for key!");
+        goto free_salt;
+    }
+    key->mode = EXT4_ENCRYPTION_MODE_AES_256_XTS;
+    key->size = EXT4_MAX_KEY_SIZE;
+
+    pam_log(LOG_NOTICE, "Generating key for salt_data '%s'", salt_data);
+    retval = pbkdf2_sha512(auth_token, &salt, EXT4_PBKDF2_ITERATIONS, key->raw);
+    if (retval != PAM_SUCCESS)
+        goto free_salt;
+
+    // avoid duplicates in the key list
+    {
+        struct ext4_encryption_key* current_key = key;
+        while (current_key-- > keys->data)
+            if (memcmp(current_key, key, sizeof(*key)) == 0) {
+                key_list_pop(keys);
+                pam_log(LOG_NOTICE, "Found duplicate key");
+                goto free_salt;
+            }
+    }
+
+free_salt:
+    salt_destroy(&salt);
+}
 
 
 
@@ -422,7 +467,7 @@ pam_sm_authenticate(
     }
 
     // we will use a key list for carrying the keys from the authentication
-    // phaase to the session setup phase
+    // phase to the session setup phase
     struct key_list* keys = malloc(sizeof(*keys));
     if (!keys) {
         pam_log(LOG_ERR, "Failed to allocate memory for the key list!");
@@ -439,39 +484,7 @@ pam_sm_authenticate(
     while (f && ((mnt = getmntent(f)) != NULL)) {
         if (strcmp(mnt->mnt_type, "ext4") || access(mnt->mnt_dir, R_OK))
             continue;
-
-        struct salt salt = salt_parse(mnt->mnt_dir);
-        if (!salt.salt) {
-            pam_log(LOG_WARNING, "No salt for mount '%s'", mnt->mnt_dir);
-            continue;
-        }
-
-        struct ext4_encryption_key* key = key_list_alloc_key(keys);
-        if (!key) {
-            pam_log(LOG_WARNING, "Could not allocate space for key!");
-            goto free_salt;
-        }
-        key->mode = EXT4_ENCRYPTION_MODE_AES_256_XTS;
-        key->size = EXT4_MAX_KEY_SIZE;
-
-        pam_log(LOG_NOTICE, "Generating key for mount '%s'", mnt->mnt_dir);
-        retval = pbkdf2_sha512(auth_token, &salt, EXT4_PBKDF2_ITERATIONS, key->raw);
-        if (retval != PAM_SUCCESS)
-            goto free_salt;
-
-        // avoid duplicates in the key list
-        {
-            struct ext4_encryption_key* current_key = key;
-            while (current_key-- > keys->data)
-                if (memcmp(current_key, key, sizeof(*key)) == 0) {
-                    key_list_pop(keys);
-                    pam_log(LOG_NOTICE, "Found duplicate key");
-                    goto free_salt;
-                }
-        }
-
-free_salt:
-        salt_destroy(&salt);
+       generate_key(flags, mnt->mnt_dir, auth_token, keys);
     }
     endmntent(f);
 
