@@ -138,6 +138,10 @@ key_list_alloc_key(
         struct ext4_encryption_key* tmp = malloc(old_size * 2);
         if (!tmp)
             return NULL;
+        if (list->data == NULL) {
+            list->data = tmp;
+            return list->data + current_pos;
+        }
         memcpy(tmp, list->data, old_size);
         memset(list->data, 0, old_size);
         free(list->data);
