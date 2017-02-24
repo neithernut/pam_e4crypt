@@ -22,6 +22,13 @@ Invoke this module during the authentication phase after the passphrase is
 set, so the keys can be generated, and during the session phase right after
 pam_keyinit, so the keys are added to the session keyring.
 
+User can have a specific salt stored in `$HOME/.ext4_encryption_salt`.
+You can generate this salt with one of the following commands :
+
+``` echo -n `uuidgen` > ~/.ext4_encryption_salt ```
+
+``` echo -n `head -c 16 /dev/urandom | xxd -p` > ~/.ext4_encryption_salt ```
+
 
 Dependencies
 ------------

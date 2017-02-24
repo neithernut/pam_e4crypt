@@ -21,6 +21,7 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <syslog.h>
+#include <limits.h>
 
 #include <keyutils.h>
 
@@ -390,7 +391,76 @@ generate_key_ref_str(
     memset(key_desc, 0, sizeof(key_desc));
 }
 
+/**
+ * Generate a key and store it into the list
+ */
+static
+void
+generate_key(
+        int pam_flags,
+        char* salt_data,
+        char* auth_token,
+        struct key_list* keys
+) {
+    int flags = pam_flags;
+    int retval = 0;
+    struct salt salt = salt_parse(salt_data);
+    if (!salt.salt) {
+        pam_log(LOG_WARNING, "Invalid salt data '%s'", salt_data);
+        return;
+    }
+    struct ext4_encryption_key* key = key_list_alloc_key(keys);
+    if (!key) {
+        pam_log(LOG_WARNING, "Could not allocate space for key!");
+        goto free_salt;
+    }
+    key->mode = EXT4_ENCRYPTION_MODE_AES_256_XTS;
+    key->size = EXT4_MAX_KEY_SIZE;
 
+    pam_log(LOG_NOTICE, "Generating key for salt_data '%s'", salt_data);
+    retval = pbkdf2_sha512(auth_token, &salt, EXT4_PBKDF2_ITERATIONS, key->raw);
+    if (retval != PAM_SUCCESS)
+        goto free_salt;
+
+    // avoid duplicates in the key list
+    {
+        struct ext4_encryption_key* current_key = key;
+        while (current_key-- > keys->data)
+            if (memcmp(current_key, key, sizeof(*key)) == 0) {
+                key_list_pop(keys);
+                pam_log(LOG_NOTICE, "Found duplicate key");
+                goto free_salt;
+            }
+    }
+
+free_salt:
+    salt_destroy(&salt);
+}
+
+/**
+ * Read salt_data from file.
+ */
+static
+char*
+read_salt_data(
+        char* path
+) {
+    char* result = NULL;
+    int fd = open(path, O_RDONLY);
+    if (fd == -1) {
+        return result;
+    }
+    char buf[EXT4_MAX_SALT_SIZE + 2];
+    int nb = read(fd, buf, sizeof(buf));
+    close(fd);
+    if (nb >= 0) {
+        result = malloc(nb + 1);
+        memcpy(result, buf, nb);
+        result[nb] = '\0';
+        memset(buf, 0, sizeof(buf));
+    }
+    return result;
+}
 
 
 // PAM authentication module implementations
@@ -422,7 +492,7 @@ pam_sm_authenticate(
     }
 
     // we will use a key list for carrying the keys from the authentication
-    // phaase to the session setup phase
+    // phase to the session setup phase
     struct key_list* keys = malloc(sizeof(*keys));
     if (!keys) {
         pam_log(LOG_ERR, "Failed to allocate memory for the key list!");
@@ -430,6 +500,24 @@ pam_sm_authenticate(
     }
     key_list_init(keys);
     pam_set_data(pamh, PAM_E4CRYPT_KEY_DATA, keys, key_list_pam_cleanup);
+
+    // First read a salt define in a fixed place in the HOME directory
+    const char *username;
+    retval = pam_get_item(pamh, PAM_USER, (void*) &username);
+    if (retval != PAM_SUCCESS)
+        return retval;
+    struct passwd const* pw = pam_modutil_getpwnam(pamh, username);
+    if (!pw) {
+        pam_log(LOG_ERR, "error looking up user");
+        return PAM_USER_UNKNOWN;
+    }
+    char path[PATH_MAX];
+    snprintf(path, PATH_MAX, "%s/%s", pw->pw_dir, ".ext4_encryption_salt");
+    char* salt_data = read_salt_data(path);
+    if (salt_data) {
+        generate_key(flags, salt_data, auth_token, keys);
+        free(salt_data);
+    }
 
     // We have to generate a policy for each ext4 file system availible.
     // Hence, we iterate over all mounted file systems and create a policy for
@@ -439,39 +527,7 @@ pam_sm_authenticate(
     while (f && ((mnt = getmntent(f)) != NULL)) {
         if (strcmp(mnt->mnt_type, "ext4") || access(mnt->mnt_dir, R_OK))
             continue;
-
-        struct salt salt = salt_parse(mnt->mnt_dir);
-        if (!salt.salt) {
-            pam_log(LOG_WARNING, "No salt for mount '%s'", mnt->mnt_dir);
-            continue;
-        }
-
-        struct ext4_encryption_key* key = key_list_alloc_key(keys);
-        if (!key) {
-            pam_log(LOG_WARNING, "Could not allocate space for key!");
-            goto free_salt;
-        }
-        key->mode = EXT4_ENCRYPTION_MODE_AES_256_XTS;
-        key->size = EXT4_MAX_KEY_SIZE;
-
-        pam_log(LOG_NOTICE, "Generating key for mount '%s'", mnt->mnt_dir);
-        retval = pbkdf2_sha512(auth_token, &salt, EXT4_PBKDF2_ITERATIONS, key->raw);
-        if (retval != PAM_SUCCESS)
-            goto free_salt;
-
-        // avoid duplicates in the key list
-        {
-            struct ext4_encryption_key* current_key = key;
-            while (current_key-- > keys->data)
-                if (memcmp(current_key, key, sizeof(*key)) == 0) {
-                    key_list_pop(keys);
-                    pam_log(LOG_NOTICE, "Found duplicate key");
-                    goto free_salt;
-                }
-        }
-
-free_salt:
-        salt_destroy(&salt);
+       generate_key(flags, mnt->mnt_dir, auth_token, keys);
     }
     endmntent(f);
 
