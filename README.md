@@ -65,6 +65,21 @@ Additional cflags and ldflags can be supplied via the `CMAKE_C_FLAGS` and
 cmake -DCMAKE_C_FLAGS="-O2 -fstack-protector=strong" <path-to-source>
 ```
 
+The module is automatically installed in a directory `security` which resides in
+the same folder as the PAM library. If those directories are symlinks on the
+target platform, the actual installation path may differ from the installation
+path originally used by PAM due to the default search order used by CMake.
+
+Albeit the module should still be found by PAM, users may choose to specify the
+library base path used for installation manually by setting the
+`CMAKE_INSTALL_LIBDIR` variable.
+
+For example, run
+```
+cmake -DCMAKE_INSTALL_LIBDIR=<lib-base-path> <path-to-source>
+```
+to prepare the module for installation to `<lib-base-path>/security/`.
+
 
 About passwords, mounts and policies
 ------------------------------------

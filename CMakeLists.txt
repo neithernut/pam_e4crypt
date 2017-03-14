@@ -24,8 +24,10 @@ target_link_libraries(pam_e4crypt pam keyutils OpenSSL::Crypto uuid)
 
 # install the module in the same place where all the other modules should be
 # NOTE: we actually disrespect the install prefix here
-get_filename_component(LIBDIR ${PAM_LIBRARY} DIRECTORY)
+if(NOT DEFINED CMAKE_INSTALL_LIBDIR)
+    get_filename_component(CMAKE_INSTALL_LIBDIR ${PAM_LIBRARY} DIRECTORY)
+endif()
 install(TARGETS pam_e4crypt
-        LIBRARY DESTINATION "${LIBDIR}/security/"
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/security/"
 )
 
