@@ -18,9 +18,37 @@ Note that the only encryption mode currently supported is aes256-xts.
 Using this module
 -----------------
 
-Invoke this module during the authentication phase after the passphrase is
-set, so the keys can be generated, and during the session phase right after
-pam_keyinit, so the keys are added to the session keyring.
+This module should be invoked late during the authentication phase as well as
+early during the session phase, after an invocation of the `pam_keyinit` module.
+The module should be marked as `required` for the authentication phase and
+either `required` or `optional` for the session phase, e.g.:
+
+```
+auth ...
+auth        required        pam_e4crypt.so
+
+account ...
+password ...
+
+session     required        pam_keyinit.so
+session     required        pam_e4crypt.so
+session ...
+```
+
+During the authentication phase, keys are generated from the user password.
+Hence, the module should be invoked late, at a point where the password is
+available.
+
+During the session phase, the generated keys are added to the session keyring.
+Obviously, the keyring has to be initialized. Hence, `pam_keyinit` or an
+equivalent module has to invoked prior to `pam_e4crypt`. Since other session
+modules may access encrypted directories, it is highly recommended to have
+`pam_e4crypt` invoked early.
+
+As this module is considered experimental, users also may want to specify
+`onerr=succeed`. Furthermore, it has been reported that having the module
+`required` for the session phase may break some setups. Hence, new users are
+encouraged making the module `optional` for that phase, at least initially.
 
 User can have a specific salt stored in `$HOME/.ext4_encryption_salt`.
 You can generate this salt with one of the following commands :
