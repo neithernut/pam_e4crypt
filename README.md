@@ -55,7 +55,7 @@ You can generate this salt with one of the following commands :
 
 ``` echo -n `uuidgen` > ~/.ext4_encryption_salt ```
 
-``` echo -n `head -c 16 /dev/urandom | xxd -p` > ~/.ext4_encryption_salt ```
+``` echo -n s:`head -c 16 /dev/urandom | xxd -p` > ~/.ext4_encryption_salt ```
 
 
 Dependencies
