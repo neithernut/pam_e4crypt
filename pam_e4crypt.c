@@ -561,7 +561,7 @@ pam_sm_setcred(
  * Implementation `pam_sm_open_session` for this module
  *
  * Retrieves the keys previously generated in the authentication stage and adds
- * them to the session keyring.
+ * them to the user keyring.
  */
 PAM_EXTERN
 int
@@ -592,13 +592,13 @@ pam_sm_open_session(
         return PAM_USER_UNKNOWN;
     }
 
-    // We need to switch the real UID and GID to find the user session keyring.
+    // We need to switch the real UID and GID to find the user keyring.
     // We also need to switch the FS UID and GID so the keys end up with the
     // correct permission.
     uid_t old_uid = getuid();
     uid_t old_gid = getgid();
 
-    key_serial_t session_keyring = 0;
+    key_serial_t user_keyring = 0;
 
     if ((old_gid != pw->pw_gid) && (retval = setregid(pw->pw_gid, -1)) < 0) {
         pam_log(LOG_ERR, "Could not set GID: %s", strerror(errno));
@@ -630,7 +630,7 @@ pam_sm_open_session(
                 key_ref_str, pw->pw_uid, pw->pw_gid);
 
         key_serial_t key = add_key(EXT2FS_KEY_TYPE_LOGON, key_ref_str,
-                ext4_key, sizeof(*ext4_key), KEY_SPEC_SESSION_KEYRING);
+                ext4_key, sizeof(*ext4_key), KEY_SPEC_USER_KEYRING);
         if (key < 0) {
             pam_log(LOG_ERR, "Could not add key: %s", strerror(errno));
             continue;
@@ -639,25 +639,25 @@ pam_sm_open_session(
 
     if ((old_uid != pw->pw_uid) && (retval = setfsuid(old_uid) < 0)) {
         pam_log(LOG_ERR, "Could not set GID: %s", strerror(errno));
-        session_keyring = 0;
+        user_keyring = 0;
     }
 
 reset_fsgid:
     if ((old_gid != pw->pw_gid) && (retval = setfsgid(old_gid)) < 0) {
         pam_log(LOG_ERR, "Could not set UID: %s", strerror(errno));
-        session_keyring = 0;
+        user_keyring = 0;
     }
 
 reset_uid:
     if ((old_uid != pw->pw_uid) && (retval = setreuid(old_uid, -1) < 0)) {
         pam_log(LOG_ERR, "Could not set GID: %s", strerror(errno));
-        session_keyring = 0;
+        user_keyring = 0;
     }
 
 reset_gid:
     if ((old_gid != pw->pw_gid) && (retval = setregid(old_gid, -1)) < 0) {
         pam_log(LOG_ERR, "Could not set UID: %s", strerror(errno));
-        session_keyring = 0;
+        user_keyring = 0;
     }
 
     return retval;
