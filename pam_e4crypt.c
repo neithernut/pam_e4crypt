@@ -606,9 +606,26 @@ pam_sm_open_session(
         const char** argv ///< arguments passed to the module
 ) {
     int retval;
+    key_serial_t keyring = KEY_SPEC_SESSION_KEYRING;
 
     // parse arguments passed to the module on the session line
     for (int i = 0; i < argc; ++i) {
+        char const* option;
+
+        if (option = get_modarg_value("keyring", argv[i])) {
+            // A keyring option may have been passed. If so, we try to retrieve
+            // the key.
+            keyring = request_key("keyring", option, NULL, 0);
+            if (keyring > 0)
+                continue;
+
+            pam_log(LOG_ERR,
+                    "Could not retrieve keyring '%s': %s",
+                    option,
+                    strerror(errno));
+            return PAM_SESSION_ERR;
+        }
+
         pam_log(LOG_WARNING, "Unknown option for open_session: %s", argv[i]);
     }
 
@@ -667,7 +684,7 @@ pam_sm_open_session(
                 key_ref_str, pw->pw_uid, pw->pw_gid);
 
         key_serial_t key = add_key(EXT2FS_KEY_TYPE_LOGON, key_ref_str,
-                ext4_key, sizeof(*ext4_key), KEY_SPEC_SESSION_KEYRING);
+                ext4_key, sizeof(*ext4_key), keyring);
         if (key < 0) {
             pam_log(LOG_ERR, "Could not add key: %s", strerror(errno));
             continue;
