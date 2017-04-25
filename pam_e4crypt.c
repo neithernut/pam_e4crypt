@@ -75,6 +75,35 @@ static const size_t hexchars_size = 16;
 // utility functions
 
 
+/**
+ * Retrieve the value of an argument
+ *
+ * @returns the value of the option or NULL if the argument doesn't match the
+ *          name supplied
+ */
+static
+char const*
+get_modarg_value(
+    char const* modarg_name, ///< name of the argument
+    char const* modarg ///< the argument
+) {
+    // match the name
+    const size_t name_length = strlen(modarg_name);
+    if (strncmp(modarg, modarg_name, name_length) != 0)
+        return NULL;
+
+    // an option either has a value concanated to the name via `=` or it is
+    // empty (e.g. the argument only contains the name)
+    if (modarg[name_length] != '=') {
+        if (modarg[name_length] == '\0')
+            return "";
+    }
+
+    // whatever comes after the `=` is a value
+    return modarg + name_length + 1;
+}
+
+
 
 
 /**
