@@ -72,6 +72,11 @@ static const size_t hexchars_size = 16;
 
 
 
+// utility functions
+
+
+
+
 /**
  * Encryption key list
  *
