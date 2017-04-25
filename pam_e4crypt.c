@@ -607,6 +607,11 @@ pam_sm_open_session(
 ) {
     int retval;
 
+    // parse arguments passed to the module on the session line
+    for (int i = 0; i < argc; ++i) {
+        pam_log(LOG_WARNING, "Unknown option for open_session: %s", argv[i]);
+    }
+
     // get the keys we are about to insert
     struct key_list* keys = NULL;
     retval = pam_get_data(pamh, PAM_E4CRYPT_KEY_DATA, (const void**) &keys);
