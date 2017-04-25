@@ -598,8 +598,6 @@ pam_sm_open_session(
     uid_t old_uid = getuid();
     uid_t old_gid = getgid();
 
-    key_serial_t session_keyring = 0;
-
     if ((old_gid != pw->pw_gid) && (retval = setregid(pw->pw_gid, -1)) < 0) {
         pam_log(LOG_ERR, "Could not set GID: %s", strerror(errno));
         return PAM_SESSION_ERR;
@@ -637,28 +635,20 @@ pam_sm_open_session(
         }
     }
 
-    if ((old_uid != pw->pw_uid) && (retval = setfsuid(old_uid) < 0)) {
+    if ((old_uid != pw->pw_uid) && (retval = setfsuid(old_uid) < 0))
         pam_log(LOG_ERR, "Could not set GID: %s", strerror(errno));
-        session_keyring = 0;
-    }
 
 reset_fsgid:
-    if ((old_gid != pw->pw_gid) && (retval = setfsgid(old_gid)) < 0) {
+    if ((old_gid != pw->pw_gid) && (retval = setfsgid(old_gid)) < 0)
         pam_log(LOG_ERR, "Could not set UID: %s", strerror(errno));
-        session_keyring = 0;
-    }
 
 reset_uid:
-    if ((old_uid != pw->pw_uid) && (retval = setreuid(old_uid, -1) < 0)) {
+    if ((old_uid != pw->pw_uid) && (retval = setreuid(old_uid, -1) < 0))
         pam_log(LOG_ERR, "Could not set GID: %s", strerror(errno));
-        session_keyring = 0;
-    }
 
 reset_gid:
-    if ((old_gid != pw->pw_gid) && (retval = setregid(old_gid, -1)) < 0) {
+    if ((old_gid != pw->pw_gid) && (retval = setregid(old_gid, -1)) < 0)
         pam_log(LOG_ERR, "Could not set UID: %s", strerror(errno));
-        session_keyring = 0;
-    }
 
     return retval;
 }
