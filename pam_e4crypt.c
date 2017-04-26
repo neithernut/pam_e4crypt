@@ -685,8 +685,8 @@ pam_sm_open_session(
         if (option = get_modarg_value("keyring", argv[i])) {
             // A keyring option may have been passed. If so, we try to retrieve
             // the key.
-            keyring = request_key("keyring", option, NULL, 0);
-            if (keyring > 0)
+            keyring = parse_keyring(option);
+            if (keyring != 0)
                 continue;
 
             pam_log(LOG_ERR,
