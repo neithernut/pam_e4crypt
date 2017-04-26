@@ -497,6 +497,76 @@ read_salt_data(
 }
 
 
+
+
+// keyring retrieval
+
+
+/**
+ * Named key
+ *
+ * Represenation of a named key of some sort
+ */
+struct named_key {
+    char const* name;
+    key_serial_t id;
+};
+
+
+/**
+ * Special keys
+ *
+ * List of special named keys as understood by keyctl-1.5.10.
+ */
+static
+struct named_key const special_keys[] = {
+    {"@t" , KEY_SPEC_THREAD_KEYRING        },
+    {"@p" , KEY_SPEC_PROCESS_KEYRING       },
+    {"@s" , KEY_SPEC_SESSION_KEYRING       },
+    {"@u" , KEY_SPEC_USER_KEYRING          },
+    {"@us", KEY_SPEC_USER_SESSION_KEYRING  },
+    {"@g" , KEY_SPEC_GROUP_KEYRING         },
+    {"@a" , KEY_SPEC_REQKEY_AUTH_KEY       }
+};
+
+
+/**
+ * Find a keyring matching a spec
+ *
+ * @returns the non-zero keyring id found or `0`, if no keyring was found
+ *
+ * This function returns the key specified by the string supplied. First, it is
+ * looked up in a list of special keys. If the key is not one of the special
+ * keys, a keyring is searched using `request_key()`. If no keyring could be
+ * found, `0` is returned and `errno` set.
+ */
+static
+key_serial_t
+parse_keyring(
+    char const* keyring ///< specification of the keyring
+) {
+    // first, look up in the list of special keys
+    struct named_key const* curr;
+    curr = special_keys + sizeof(special_keys)/sizeof(special_keys[0]);
+    while (curr-- > special_keys)
+        if (strcmp(curr->name, keyring) == 0)
+            return curr->id;
+
+    // look up using the syscall
+    key_serial_t retval = request_key("keyring", keyring, NULL, 0);
+
+    // Make sure we return `0` instead of `-1` if no key was found. If we used
+    // negative values for errors, we would potentially mask special key ids.
+    if (retval > 0)
+        return retval;
+
+    // errno should already be set by `request_key` at this point.
+    return 0;
+}
+
+
+
+
 // PAM authentication module implementations
 
 
