@@ -1,5 +1,4 @@
-pam_e4crypt
-===========
+# pam_e4crypt
 
 This is a PAM module for unlocking transparently encrypted directories on ext4.
 
@@ -15,8 +14,7 @@ to directories for which she previously set a "policy" matching her passphrase
 Note that the only encryption mode currently supported is aes256-xts.
 
 
-Using this module
------------------
+## Using this module
 
 This module should be invoked late during the authentication phase as well as
 early during the session phase, after an invocation of the `pam_keyinit` module.
@@ -58,8 +56,7 @@ You can generate this salt with one of the following commands :
 ``` echo -n s:`head -c 16 /dev/urandom | xxd -p` > ~/.ext4_encryption_salt ```
 
 
-Dependencies
-------------
+## Dependencies
 
 At runtime, the module requires:
  * Linux-Kernel>=4.1
@@ -74,8 +71,7 @@ required in addition to:
  * A C-compiler (e.g. gcc or clang)
 
 
-Installation
-------------
+## Installation
 
 The module is built using CMake. Run
 
@@ -109,8 +105,7 @@ cmake -DCMAKE_INSTALL_LIBDIR=<lib-base-path> <path-to-source>
 to prepare the module for installation to `<lib-base-path>/security/`.
 
 
-About passwords, mounts and policies
-------------------------------------
+## About passwords, mounts and policies
 
 "policies" are actually keys generated from a passphrase and a salt. This PAM
 module will generate keys from the user's passphrase and add them as policies,
@@ -126,8 +121,7 @@ This module could, in theory, print or log some information about that, but
 currently, it doesn't. This may, however, change in the future.
 
 
-Licensing
----------
+## Licensing
 
 The module is currently licensed under the GPLv2. Have a look at the LICENSE
 file for more information. Also, you might want to consult a lawyer if you
