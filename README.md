@@ -48,6 +48,9 @@ As this module is considered experimental, users also may want to specify
 `required` for the session phase may break some setups. Hence, new users are
 encouraged making the module `optional` for that phase, at least initially.
 
+
+### Salt
+
 User can have a specific salt stored in `$HOME/.ext4_encryption_salt`.
 You can generate this salt with one of the following commands :
 
