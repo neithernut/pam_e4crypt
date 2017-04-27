@@ -59,6 +59,21 @@ You can generate this salt with one of the following commands :
 ``` echo -n s:`head -c 16 /dev/urandom | xxd -p` > ~/.ext4_encryption_salt ```
 
 
+### Keyring
+
+By default, keys are added to the session keyring. Using the `keyring` argument
+in the PAM config, it is possible to specify an alternative keyring to which the
+keys should be added. Use like:
+
+```
+session     required        pam_e4crypt.so  keyring=<desc>
+```
+
+As `<desc>`, one may specify either a keyring's description or one of the
+"special values" understood by `keyctl` (1.5), e.g. `@u` for the user specific
+keyring.
+
+
 ## Dependencies
 
 At runtime, the module requires:
