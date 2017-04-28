@@ -72,6 +72,40 @@ static const size_t hexchars_size = 16;
 
 
 
+// utility functions
+
+
+/**
+ * Retrieve the value of an argument
+ *
+ * @returns the value of the option or NULL if the argument doesn't match the
+ *          name supplied
+ */
+static
+char const*
+get_modarg_value(
+    char const* modarg_name, ///< name of the argument
+    char const* modarg ///< the argument
+) {
+    // match the name
+    const size_t name_length = strlen(modarg_name);
+    if (strncmp(modarg, modarg_name, name_length) != 0)
+        return NULL;
+
+    // an option either has a value concanated to the name via `=` or it is
+    // empty (e.g. the argument only contains the name)
+    if (modarg[name_length] != '=') {
+        if (modarg[name_length] == '\0')
+            return "";
+    }
+
+    // whatever comes after the `=` is a value
+    return modarg + name_length + 1;
+}
+
+
+
+
 /**
  * Encryption key list
  *
@@ -463,6 +497,76 @@ read_salt_data(
 }
 
 
+
+
+// keyring retrieval
+
+
+/**
+ * Named key
+ *
+ * Represenation of a named key of some sort
+ */
+struct named_key {
+    char const* name;
+    key_serial_t id;
+};
+
+
+/**
+ * Special keys
+ *
+ * List of special named keys as understood by keyctl-1.5.10.
+ */
+static
+struct named_key const special_keys[] = {
+    {"@t" , KEY_SPEC_THREAD_KEYRING        },
+    {"@p" , KEY_SPEC_PROCESS_KEYRING       },
+    {"@s" , KEY_SPEC_SESSION_KEYRING       },
+    {"@u" , KEY_SPEC_USER_KEYRING          },
+    {"@us", KEY_SPEC_USER_SESSION_KEYRING  },
+    {"@g" , KEY_SPEC_GROUP_KEYRING         },
+    {"@a" , KEY_SPEC_REQKEY_AUTH_KEY       }
+};
+
+
+/**
+ * Find a keyring matching a spec
+ *
+ * @returns the non-zero keyring id found or `0`, if no keyring was found
+ *
+ * This function returns the key specified by the string supplied. First, it is
+ * looked up in a list of special keys. If the key is not one of the special
+ * keys, a keyring is searched using `request_key()`. If no keyring could be
+ * found, `0` is returned and `errno` set.
+ */
+static
+key_serial_t
+parse_keyring(
+    char const* keyring ///< specification of the keyring
+) {
+    // first, look up in the list of special keys
+    struct named_key const* curr;
+    curr = special_keys + sizeof(special_keys)/sizeof(special_keys[0]);
+    while (curr-- > special_keys)
+        if (strcmp(curr->name, keyring) == 0)
+            return curr->id;
+
+    // look up using the syscall
+    key_serial_t retval = request_key("keyring", keyring, NULL, 0);
+
+    // Make sure we return `0` instead of `-1` if no key was found. If we used
+    // negative values for errors, we would potentially mask special key ids.
+    if (retval > 0)
+        return retval;
+
+    // errno should already be set by `request_key` at this point.
+    return 0;
+}
+
+
+
+
 // PAM authentication module implementations
 
 
@@ -572,6 +676,28 @@ pam_sm_open_session(
         const char** argv ///< arguments passed to the module
 ) {
     int retval;
+    key_serial_t keyring = KEY_SPEC_SESSION_KEYRING;
+
+    // parse arguments passed to the module on the session line
+    for (int i = 0; i < argc; ++i) {
+        char const* option;
+
+        if (option = get_modarg_value("keyring", argv[i])) {
+            // A keyring option may have been passed. If so, we try to retrieve
+            // the key.
+            keyring = parse_keyring(option);
+            if (keyring != 0)
+                continue;
+
+            pam_log(LOG_ERR,
+                    "Could not retrieve keyring '%s': %s",
+                    option,
+                    strerror(errno));
+            return PAM_SESSION_ERR;
+        }
+
+        pam_log(LOG_WARNING, "Unknown option for open_session: %s", argv[i]);
+    }
 
     // get the keys we are about to insert
     struct key_list* keys = NULL;
@@ -597,8 +723,6 @@ pam_sm_open_session(
     // correct permission.
     uid_t old_uid = getuid();
     uid_t old_gid = getgid();
-
-    key_serial_t session_keyring = 0;
 
     if ((old_gid != pw->pw_gid) && (retval = setregid(pw->pw_gid, -1)) < 0) {
         pam_log(LOG_ERR, "Could not set GID: %s", strerror(errno));
@@ -630,35 +754,27 @@ pam_sm_open_session(
                 key_ref_str, pw->pw_uid, pw->pw_gid);
 
         key_serial_t key = add_key(EXT2FS_KEY_TYPE_LOGON, key_ref_str,
-                ext4_key, sizeof(*ext4_key), KEY_SPEC_SESSION_KEYRING);
+                ext4_key, sizeof(*ext4_key), keyring);
         if (key < 0) {
             pam_log(LOG_ERR, "Could not add key: %s", strerror(errno));
             continue;
         }
     }
 
-    if ((old_uid != pw->pw_uid) && (retval = setfsuid(old_uid) < 0)) {
+    if ((old_uid != pw->pw_uid) && (retval = setfsuid(old_uid) < 0))
         pam_log(LOG_ERR, "Could not set GID: %s", strerror(errno));
-        session_keyring = 0;
-    }
 
 reset_fsgid:
-    if ((old_gid != pw->pw_gid) && (retval = setfsgid(old_gid)) < 0) {
+    if ((old_gid != pw->pw_gid) && (retval = setfsgid(old_gid)) < 0)
         pam_log(LOG_ERR, "Could not set UID: %s", strerror(errno));
-        session_keyring = 0;
-    }
 
 reset_uid:
-    if ((old_uid != pw->pw_uid) && (retval = setreuid(old_uid, -1) < 0)) {
+    if ((old_uid != pw->pw_uid) && (retval = setreuid(old_uid, -1) < 0))
         pam_log(LOG_ERR, "Could not set GID: %s", strerror(errno));
-        session_keyring = 0;
-    }
 
 reset_gid:
-    if ((old_gid != pw->pw_gid) && (retval = setregid(old_gid, -1)) < 0) {
+    if ((old_gid != pw->pw_gid) && (retval = setregid(old_gid, -1)) < 0)
         pam_log(LOG_ERR, "Could not set UID: %s", strerror(errno));
-        session_keyring = 0;
-    }
 
     return retval;
 }
