@@ -104,7 +104,7 @@ supported (supply `.` as the source directory).
 Additional cflags and ldflags can be supplied via the `CMAKE_C_FLAGS` and
 `CMAKE_MODULE_LINKER_FLAGS` when generating the build system, e.g.:
 ```
-cmake -DCMAKE_C_FLAGS="-O2 -fstack-protector=strong" <path-to-source>
+cmake -DCMAKE_C_FLAGS="-O2 -fstack-protector-strong" <path-to-source>
 ```
 
 The module is automatically installed in a directory `security` which resides in
