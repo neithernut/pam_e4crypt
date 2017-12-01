@@ -58,6 +58,13 @@ You can generate this salt with one of the following commands :
 
 ``` echo -n s:`head -c 16 /dev/urandom | xxd -p` > ~/.ext4_encryption_salt ```
 
+You can also store the salt outside your home directory in your pam config:
+
+```
+auth        required        pam_e4crypt.so  saltpath=/home/.e4crypt
+```
+
+The module will then look for the salt in `/home/.e4crypt/$USER`
 
 ### Keyring
 
