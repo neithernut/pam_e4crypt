@@ -132,6 +132,18 @@ just like `e4crypt add_key`. If you view you session keyring, e.g. using
 prefixed with "ext4:". The hexadecimal string following the prefix is the actual
 policy descriptor which you can pass to `e4crypt set_policy`.
 
+The correct process for encrypting a folder once logged in with pam_e4crypt is:
+
+```
+$ keyctl show
+Session Keyring
+ 111111111 --alswrv      0     0  keyring: _ses
+ 222222222 ----s-rv      0     0   \_ user: invocation_id
+ 333333333 --als-rv   1000  1000   \_ logon: ext4:abcdef012345678
+$ mkdir crypted
+$ e4crypt set_policy abcdef012345678 crypted
+```
+
 ## Licensing
 
 The module is currently licensed under the GPLv2. Have a look at the LICENSE
