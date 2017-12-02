@@ -132,13 +132,6 @@ just like `e4crypt add_key`. If you view you session keyring, e.g. using
 prefixed with "ext4:". The hexadecimal string following the prefix is the actual
 policy descriptor which you can pass to `e4crypt set_policy`.
 
-Please note that the salt is, apparently, parsed from the mtab in some way. This
-indicates that policies are actually specific to mounts to some extend. Sadly,
-there is no (good) way of telling which policy matches a specific mount.
-This module could, in theory, print or log some information about that, but
-currently, it doesn't. This may, however, change in the future.
-
-
 ## Licensing
 
 The module is currently licensed under the GPLv2. Have a look at the LICENSE

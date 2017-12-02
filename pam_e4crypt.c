@@ -623,18 +623,6 @@ pam_sm_authenticate(
         free(salt_data);
     }
 
-    // We have to generate a policy for each ext4 file system availible.
-    // Hence, we iterate over all mounted file systems and create a policy for
-    // each ext4 fs we find.
-    FILE* f = setmntent("/etc/mtab", "r");
-    struct mntent *mnt;
-    while (f && ((mnt = getmntent(f)) != NULL)) {
-        if (strcmp(mnt->mnt_type, "ext4") || access(mnt->mnt_dir, R_OK))
-            continue;
-       generate_key(flags, mnt->mnt_dir, auth_token, keys);
-    }
-    endmntent(f);
-
     return PAM_SUCCESS;
 }
 
