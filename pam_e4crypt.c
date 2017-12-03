@@ -617,6 +617,19 @@ pam_sm_authenticate(
     }
     char path[PATH_MAX];
     snprintf(path, PATH_MAX, "%s/%s", pw->pw_dir, ".ext4_encryption_salt");
+
+    for (int i = 0; i < argc; ++i) {
+        char const* option;
+
+        if (option = get_modarg_value("saltpath", argv[i])) {
+            // If a custom saltpath has been passed, use it instead
+            int spchars = snprintf(path, PATH_MAX, "%s/%s", option, pw->pw_name);
+            continue;
+        }
+
+        pam_log(LOG_WARNING, "Unknown option for authenticate: %s", argv[i]);
+    }
+
     char* salt_data = read_salt_data(path);
     if (salt_data) {
         generate_key(flags, salt_data, auth_token, keys);
