@@ -295,6 +295,37 @@ clean_salt:
  * Generate a key reference
  */
 static
+struct ext4_encryption_key
+generate_key_from_wrapper(
+    int flags,
+    char* wrapper_path
+) {
+    char saltpath[PATH_MAX];
+    char authpath[PATH_MAX];
+    snprintf(saltpath, PATH_MAX, "%s/salt", wrapper_path);
+    snprintf(authpath, PATH_MAX, "%s/auth", wrapper_path);
+
+    struct ext4_encryption_key key = {0, {0}, 0};
+
+    int fd = open(authpath, O_RDONLY);
+    if (fd == -1) {
+        pam_log(LOG_WARNING, "Couldn't open auth token file '%s'", wrapper_path);
+        return key;
+    }
+
+    char authtok[EXT4_MAX_PASSPHRASE_SIZE + 1] = {0};
+    int authtoksize = read(fd, authtok, EXT4_MAX_PASSPHRASE_SIZE);
+    close(fd);
+
+    if (authtoksize <= 0) {
+        pam_log(LOG_WARNING, "Couldn't auth token from file '%s'", wrapper_path);
+        return key;
+    }
+
+    return generate_key(flags, saltpath, authtok);
+}
+
+static
 void
 key_get_key_ref(
         struct ext4_encryption_key* key,
@@ -461,15 +492,22 @@ pam_sm_authenticate(
         pam_log(LOG_ERR, "error looking up user");
         return PAM_USER_UNKNOWN;
     }
-    char path[PATH_MAX];
-    snprintf(path, PATH_MAX, "%s/%s", pw->pw_dir, ".ext4_encryption_salt");
+    char saltpath[PATH_MAX];
+    char wrappath[PATH_MAX] = {0};
+    snprintf(saltpath, PATH_MAX, "%s/%s", pw->pw_dir, ".ext4_encryption_salt");
 
     for (int i = 0; i < argc; ++i) {
         char const* option;
 
         if (option = get_modarg_value("saltpath", argv[i])) {
             // If a custom saltpath has been passed, use it instead
-            int spchars = snprintf(path, PATH_MAX, "%s/%s", option, pw->pw_name);
+            int spchars = snprintf(saltpath, PATH_MAX, "%s/%s", option, pw->pw_name);
+            continue;
+        }
+
+        if (option = get_modarg_value("wrappath", argv[i])) {
+            // If a custom wrappath has been passed, we'll use that
+            snprintf(wrappath, PATH_MAX, "%s/%s", option, pw->pw_name);
             continue;
         }
 
@@ -482,7 +520,25 @@ pam_sm_authenticate(
         return PAM_AUTH_ERR;
     }
 
-    *key = generate_key(flags, path, auth_token);
+    *key = generate_key(flags, saltpath, auth_token);
+
+    if (strlen(wrappath)) {
+        key_serial_t wrapkeyid = add_key_to_keyring(flags, key, KEY_SPEC_SESSION_KEYRING, pw);
+        if (retval == -1) {
+            pam_log(LOG_WARNING, "Could not add wrapper key to keyring!");
+        }
+
+        pam_log(LOG_NOTICE, "Generating key from wrapper folder '%s'", wrappath);
+        *key = generate_key_from_wrapper(flags, wrappath);
+
+        // TODO: Remove wrapper key from keyring
+    }
+
+    if (key->size == 0) {
+        pam_log(LOG_NOTICE, "No key found");
+        key_list_pop(keys);
+        return PAM_SUCCESS;
+    }
 
     // avoid duplicates in the key list
     {
@@ -645,6 +701,7 @@ pam_sm_close_session(
         int argc, ///< number of arguments passed to the module
         const char** argv ///< arguments passed to the module
 ) {
+    // TODO: Remove keys from keyring
     return PAM_SUCCESS;
 }
 
