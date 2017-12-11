@@ -256,49 +256,21 @@ pbkdf2_sha512(
 
 
 /**
- * Generate a ref string from a key
- *
- * Originally ripped from e4crypt
+ * Generate a key
  */
 static
-void
-generate_key_ref_str(
-        char* key_ref_str, //!< output pointer
-        struct ext4_encryption_key* key //!< key for which to generate the ref
-) {
-    unsigned char key_ref1[SHA512_LENGTH];
-    unsigned char key_ref2[SHA512_LENGTH];
-    unsigned char key_desc[EXT4_KEY_DESCRIPTOR_SIZE];
-    int x;
-
-    SHA512(key->raw, EXT4_MAX_KEY_SIZE, key_ref1);
-    SHA512(key_ref1, SHA512_LENGTH, key_ref2);
-    memcpy(key_desc, key_ref2, EXT4_KEY_DESCRIPTOR_SIZE);
-    for (x = 0; x < EXT4_KEY_DESCRIPTOR_SIZE; ++x) {
-        sprintf(&key_ref_str[x * 2], "%02x", key_desc[x]);
-    }
-    key_ref_str[EXT4_KEY_REF_STR_BUF_SIZE - 1] = '\0';
-
-    memset(key_ref1, 0, sizeof(key_ref1));
-    memset(key_ref2, 0, sizeof(key_ref2));
-    memset(key_desc, 0, sizeof(key_desc));
-}
-
-
-/**
- * Generate a key and store it into the list
- */
-static
-void
+struct ext4_encryption_key
 generate_key(
         int flags,
         char* salt_path,
-        char* auth_token,
-        struct key_list* keys
+        char* auth_token
 ) {
+    struct ext4_encryption_key key = {0, {0}, 0};
+
     int fd = open(salt_path, O_RDONLY);
     if (fd == -1) {
-        return;
+        pam_log(LOG_WARNING, "Couldn't open salt file '%s'", salt_path);
+        return key;
     }
 
     char salt[EXT4_MAX_SALT_SIZE];
@@ -306,35 +278,74 @@ generate_key(
     close(fd);
 
     if (saltsize <= 0) {
-        return;
+        pam_log(LOG_WARNING, "Couldn't read salt from file '%s'", salt_path);
+        return key;
     }
 
-    struct ext4_encryption_key* key = key_list_alloc_key(keys);
-    if (!key) {
-        pam_log(LOG_WARNING, "Could not allocate space for key!");
-        goto clean_salt;
-    }
-    key->mode = EXT4_ENCRYPTION_MODE_AES_256_XTS;
-    key->size = EXT4_MAX_KEY_SIZE;
+    key.mode = EXT4_ENCRYPTION_MODE_AES_256_XTS;
+    key.size = EXT4_MAX_KEY_SIZE;
 
     pam_log(LOG_NOTICE, "Generating key with salt length %d from file '%s'", saltsize, salt_path);
-    pbkdf2_sha512(auth_token, salt, saltsize, EXT4_PBKDF2_ITERATIONS, key->raw);
-
-    // avoid duplicates in the key list
-    {
-        struct ext4_encryption_key* current_key = key;
-        while (current_key-- > keys->data)
-            if (memcmp(current_key, key, sizeof(*key)) == 0) {
-                key_list_pop(keys);
-                pam_log(LOG_NOTICE, "Found duplicate key");
-                goto clean_salt;
-            }
-    }
+    pbkdf2_sha512(auth_token, salt, saltsize, EXT4_PBKDF2_ITERATIONS, key.raw);
 
 clean_salt:
     memset(salt, 0, sizeof(salt));
+
+    return key;
 }
 
+/**
+ * Generate a key reference
+ */
+static
+void
+key_get_key_ref(
+        struct ext4_encryption_key* key,
+        char* out
+) {
+    unsigned char key_ref1[SHA512_LENGTH] = {0};
+    unsigned char key_ref2[SHA512_LENGTH] = {0};
+
+    SHA512(key->raw, EXT4_MAX_KEY_SIZE, key_ref1);
+    SHA512(key_ref1, SHA512_LENGTH, key_ref2);
+    memcpy(out, key_ref2, EXT4_KEY_DESCRIPTOR_SIZE);
+
+    memset(key_ref1, 0, sizeof(key_ref1));
+    memset(key_ref2, 0, sizeof(key_ref2));
+}
+
+
+/**
+ * Add a key to keyring
+ */
+static
+key_serial_t
+add_key_to_keyring(
+        int flags,
+        struct ext4_encryption_key* key,
+        key_serial_t keyring,
+        struct passwd const* pw
+) {
+    char key_ref_str[EXT2FS_KEY_DESC_PREFIX_SIZE + EXT4_KEY_REF_STR_BUF_SIZE];
+    strcpy(key_ref_str, EXT2FS_KEY_DESC_PREFIX);
+
+    unsigned char key_desc[EXT4_KEY_DESCRIPTOR_SIZE];
+    int x;
+
+    key_get_key_ref(key, key_desc);
+
+    for (x = 0; x < EXT4_KEY_DESCRIPTOR_SIZE; ++x) {
+        sprintf(&key_ref_str[EXT2FS_KEY_DESC_PREFIX_SIZE + (x * 2)], "%02x", key_desc[x]);
+    }
+    key_ref_str[EXT2FS_KEY_DESC_PREFIX_SIZE + EXT4_KEY_REF_STR_BUF_SIZE - 1] = 0;
+
+    memset(key_desc, 0, sizeof(key_desc));
+
+    pam_log(LOG_NOTICE, "Inserting key with reference %s as %d:%d",
+            key_ref_str, pw->pw_uid, pw->pw_gid);
+
+    return add_key(EXT2FS_KEY_TYPE_LOGON, key_ref_str, key, sizeof(*key), keyring);
+}
 
 
 // keyring retrieval
@@ -468,7 +479,23 @@ pam_sm_authenticate(
         pam_log(LOG_WARNING, "Unknown option for authenticate: %s", argv[i]);
     }
 
-    generate_key(flags, path, auth_token, keys);
+    struct ext4_encryption_key* key = key_list_alloc_key(keys);
+    if (!key) {
+        pam_log(LOG_WARNING, "Could not allocate space for key!");
+        return PAM_AUTH_ERR;
+    }
+
+    *key = generate_key(flags, path, auth_token);
+
+    // avoid duplicates in the key list
+    {
+        struct ext4_encryption_key* current_key = key;
+        while (current_key-- > keys->data)
+            if (memcmp(current_key, key, sizeof(*key)) == 0) {
+                key_list_pop(keys);
+                pam_log(LOG_NOTICE, "Found duplicate key");
+            }
+    }
 
     return PAM_SUCCESS;
 }
@@ -579,18 +606,11 @@ pam_sm_open_session(
         goto reset_fsgid;
     }
 
-    struct ext4_encryption_key* ext4_key = keys->data + keys->count;
-    while (ext4_key-- > keys->data) {
-        char key_ref_str[EXT2FS_KEY_DESC_PREFIX_SIZE + EXT4_KEY_REF_STR_BUF_SIZE];
-        strcpy(key_ref_str, EXT2FS_KEY_DESC_PREFIX);
-        generate_key_ref_str(key_ref_str + EXT2FS_KEY_DESC_PREFIX_SIZE,
-                ext4_key);
-        pam_log(LOG_NOTICE, "Inserting key with reference %s as %d:%d",
-                key_ref_str, pw->pw_uid, pw->pw_gid);
+    struct ext4_encryption_key* key = keys->data + keys->count;
+    while (key-- > keys->data) {
+        key_serial_t result = add_key_to_keyring(flags, key, keyring, pw);
 
-        key_serial_t key = add_key(EXT2FS_KEY_TYPE_LOGON, key_ref_str,
-                ext4_key, sizeof(*ext4_key), keyring);
-        if (key < 0) {
+        if (result < 0) {
             pam_log(LOG_ERR, "Could not add key: %s", strerror(errno));
             continue;
         }
