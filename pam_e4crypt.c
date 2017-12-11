@@ -47,11 +47,6 @@
 #define PAM_E4CRYPT_KEY_DATA "pam_e4crypt_key_data"
 
 
-#ifndef EXT4_IOC_GET_ENCRYPTION_PWSALT
-#define EXT4_IOC_GET_ENCRYPTION_PWSALT	_IOW('f', 20, __u8[16])
-#endif
-
-
 /**
  * Log honoring the silent flag
  *
@@ -89,8 +84,6 @@ get_modarg_value(
     // whatever comes after the `=` is a value
     return modarg + name_length + 1;
 }
-
-
 
 
 /**
