@@ -15,8 +15,6 @@
 
 // std and system includes
 #include <fcntl.h>
-#include <mntent.h>
-#include <string.h>
 #include <sys/fsuid.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -26,7 +24,6 @@
 #include <keyutils.h>
 
 // ext4 specific includes
-#include <ext2fs/ext2_fs.h>
 #include <ext2fs/ext2fs.h>
 
 // library includes
