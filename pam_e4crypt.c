@@ -31,7 +31,6 @@
 
 // library includes
 #include <openssl/sha.h>
-#include <uuid/uuid.h>
 
 // PAM includes
 #include <security/pam_modules.h>
