@@ -47,11 +47,6 @@
 #define PAM_E4CRYPT_KEY_DATA "pam_e4crypt_key_data"
 
 
-#ifndef EXT4_IOC_GET_ENCRYPTION_PWSALT
-#define EXT4_IOC_GET_ENCRYPTION_PWSALT	_IOW('f', 20, __u8[16])
-#endif
-
-
 /**
  * Log honoring the silent flag
  *
@@ -60,20 +55,7 @@
 #define pam_log(level, ...) do { if (~flags & PAM_SILENT) \
         syslog(level, "pam_e4crypt: " __VA_ARGS__); } while (0)
 
-
-
-
-/**
- * Hexadecimal characters
- */
-static const unsigned char *hexchars = (const unsigned char *) "0123456789abcdef";
-static const size_t hexchars_size = 16;
-
-
-
-
 // utility functions
-
 
 /**
  * Retrieve the value of an argument
@@ -102,8 +84,6 @@ get_modarg_value(
     // whatever comes after the `=` is a value
     return modarg + name_length + 1;
 }
-
-
 
 
 /**
@@ -220,126 +200,24 @@ key_list_pam_cleanup(
 }
 
 
-
-
-/**
- * Salt to use for cryptographic purposes
- *
- * Salt is considered empty/void if `salt` or `salt_len` is 0.
- */
-struct salt {
-    unsigned char *salt; ///< pointer to the actual salt
-    size_t salt_len; ///< length of the salt in bytes
-};
-
-
-/**
- * Parse a salt string
- *
- * @returns a salt parsed from the salt string
- *
- * Originally ripped from e4crypt
- */
-static
-struct salt
-salt_parse(
-    char *salt_str ///< salt string to parse
-) {
-    struct salt retval = {NULL, 0};
-
-    // TODO: clean up! (e.g. by throwing out PARSE_FLAGS_FORCE_FN)
-    unsigned char buf[EXT4_MAX_SALT_SIZE];
-    char *cp = salt_str;
-    int fd, ret, salt_len = 0;
-
-    if (strncmp(cp, "s:", 2) == 0) {
-        cp += 2;
-        salt_len = strlen(cp);
-        if (salt_len >= EXT4_MAX_SALT_SIZE)
-            return retval;
-        strncpy((char *) buf, cp, sizeof(buf));
-    } else if (cp[0] == '/') {
-    salt_from_filename:
-        fd = open(cp, O_RDONLY | O_DIRECTORY);
-        if (fd == -1 && errno == ENOTDIR)
-            fd = open(cp, O_RDONLY);
-        if (fd == -1)
-            return retval;
-        ret = ioctl(fd, EXT4_IOC_GET_ENCRYPTION_PWSALT, &buf);
-        close(fd);
-        if (ret < 0)
-            return retval;
-
-        salt_len = 16;
-    } else if (strncmp(cp, "f:", 2) == 0) {
-        cp += 2;
-        goto salt_from_filename;
-    } else if (strncmp(cp, "0x", 2) == 0) {
-        unsigned char *h, *l;
-
-        cp += 2;
-        if (strlen(cp) & 1)
-            return retval;
-        while (*cp) {
-            if (salt_len >= EXT4_MAX_SALT_SIZE)
-                return retval;
-            h = memchr(hexchars, *cp++, hexchars_size);
-            l = memchr(hexchars, *cp++, hexchars_size);
-            if (!h || !l)
-                return retval;
-            buf[salt_len++] =
-                (((unsigned char)(h - hexchars) << 4) +
-                 (unsigned char)(l - hexchars));
-        }
-    } else if (uuid_parse(cp, buf) == 0) {
-        salt_len = 16;
-    } else
-        return retval;
-
-    retval.salt = malloc(salt_len);
-    if (retval.salt) {
-        memcpy(retval.salt, buf, salt_len);
-        retval.salt_len = salt_len;
-    }
-
-    memset(buf, 0, sizeof(buf));
-
-    return retval;
-}
-
-
-/**
- * Free all resources associated with a salt
- */
-static
-void
-salt_destroy(
-        struct salt* salt ///< salt to destroy
-) {
-    memset(salt->salt, 0, salt->salt_len);
-    free(salt->salt);
-    salt->salt = NULL;
-    salt->salt_len = 0;
-}
-
-
-
-
 /**
  * Supposed pbkdf2_sha512 implementation
  *
  * Originally ripped from e4crypt
  */
 static
-int
+void
 pbkdf2_sha512(
         const char *passphrase, ///< passphrase to encode
-        struct salt *salt, ///< salt to use for encoding
+        char *salt, ///< salt to use for encoding
+        unsigned int saltsize, ///< salt to use for encoding
         unsigned int count, ///< count of cycles to perform
         unsigned char derived_key[EXT4_MAX_KEY_SIZE] ///< output
 ) {
-    // TODO: maybe "clean up"?
     size_t passphrase_size = strlen(passphrase);
+    if (passphrase_size > EXT4_MAX_PASSPHRASE_SIZE)
+        passphrase_size = EXT4_MAX_PASSPHRASE_SIZE;
+
     unsigned char buf[SHA512_LENGTH + EXT4_MAX_PASSPHRASE_SIZE] = {0};
     unsigned char tempbuf[SHA512_LENGTH] = {0};
     char final[SHA512_LENGTH] = {0};
@@ -350,22 +228,7 @@ pbkdf2_sha512(
     __u32 *final_u32 = (__u32 *)final;
     __u32 *temp_u32 = (__u32 *)tempbuf;
 
-#if 0
-    // TODO: error out properly
-    if (passphrase_size > EXT4_MAX_PASSPHRASE_SIZE) {
-        printf("Passphrase size is %zd; max is %d.\n", passphrase_size,
-               EXT4_MAX_PASSPHRASE_SIZE);
-        exit(1);
-    }
-    if (salt->salt_len > EXT4_MAX_SALT_SIZE) {
-        printf("Salt size is %zd; max is %d.\n", salt->salt_len,
-               EXT4_MAX_SALT_SIZE);
-        exit(1);
-    }
-    assert(EXT4_MAX_KEY_SIZE <= SHA512_LENGTH);
-#endif
-
-    memcpy(saltbuf, salt->salt, salt->salt_len);
+    memcpy(saltbuf, salt, saltsize);
     memcpy(&saltbuf[EXT4_MAX_SALT_SIZE], passphrase, passphrase_size);
 
     memcpy(&buf[SHA512_LENGTH], passphrase, passphrase_size);
@@ -390,8 +253,6 @@ pbkdf2_sha512(
     memset(tempbuf, 0, sizeof(tempbuf));
     memset(final, 0, sizeof(final));
     memset(saltbuf, 0, sizeof(saltbuf));
-
-    return PAM_SUCCESS;
 }
 
 
@@ -406,7 +267,6 @@ generate_key_ref_str(
         char* key_ref_str, //!< output pointer
         struct ext4_encryption_key* key //!< key for which to generate the ref
 ) {
-    // TODO: maybe "clean up"?
     unsigned char key_ref1[SHA512_LENGTH];
     unsigned char key_ref2[SHA512_LENGTH];
     unsigned char key_desc[EXT4_KEY_DESCRIPTOR_SIZE];
@@ -425,36 +285,41 @@ generate_key_ref_str(
     memset(key_desc, 0, sizeof(key_desc));
 }
 
+
 /**
  * Generate a key and store it into the list
  */
 static
 void
 generate_key(
-        int pam_flags,
-        char* salt_data,
+        int flags,
+        char* salt_path,
         char* auth_token,
         struct key_list* keys
 ) {
-    int flags = pam_flags;
-    int retval = 0;
-    struct salt salt = salt_parse(salt_data);
-    if (!salt.salt) {
-        pam_log(LOG_WARNING, "Invalid salt data '%s'", salt_data);
+    int fd = open(salt_path, O_RDONLY);
+    if (fd == -1) {
         return;
     }
+
+    char salt[EXT4_MAX_SALT_SIZE];
+    int saltsize = read(fd, salt, sizeof(salt));
+    close(fd);
+
+    if (saltsize <= 0) {
+        return;
+    }
+
     struct ext4_encryption_key* key = key_list_alloc_key(keys);
     if (!key) {
         pam_log(LOG_WARNING, "Could not allocate space for key!");
-        goto free_salt;
+        goto clean_salt;
     }
     key->mode = EXT4_ENCRYPTION_MODE_AES_256_XTS;
     key->size = EXT4_MAX_KEY_SIZE;
 
-    pam_log(LOG_NOTICE, "Generating key for salt_data '%s'", salt_data);
-    retval = pbkdf2_sha512(auth_token, &salt, EXT4_PBKDF2_ITERATIONS, key->raw);
-    if (retval != PAM_SUCCESS)
-        goto free_salt;
+    pam_log(LOG_NOTICE, "Generating key with salt length %d from file '%s'", saltsize, salt_path);
+    pbkdf2_sha512(auth_token, salt, saltsize, EXT4_PBKDF2_ITERATIONS, key->raw);
 
     // avoid duplicates in the key list
     {
@@ -463,39 +328,13 @@ generate_key(
             if (memcmp(current_key, key, sizeof(*key)) == 0) {
                 key_list_pop(keys);
                 pam_log(LOG_NOTICE, "Found duplicate key");
-                goto free_salt;
+                goto clean_salt;
             }
     }
 
-free_salt:
-    salt_destroy(&salt);
+clean_salt:
+    memset(salt, 0, sizeof(salt));
 }
-
-/**
- * Read salt_data from file.
- */
-static
-char*
-read_salt_data(
-        char* path
-) {
-    char* result = NULL;
-    int fd = open(path, O_RDONLY);
-    if (fd == -1) {
-        return result;
-    }
-    char buf[EXT4_MAX_SALT_SIZE + 2];
-    int nb = read(fd, buf, sizeof(buf));
-    close(fd);
-    if (nb >= 0) {
-        result = malloc(nb + 1);
-        memcpy(result, buf, nb);
-        result[nb] = '\0';
-        memset(buf, 0, sizeof(buf));
-    }
-    return result;
-}
-
 
 
 
@@ -630,11 +469,7 @@ pam_sm_authenticate(
         pam_log(LOG_WARNING, "Unknown option for authenticate: %s", argv[i]);
     }
 
-    char* salt_data = read_salt_data(path);
-    if (salt_data) {
-        generate_key(flags, salt_data, auth_token, keys);
-        free(salt_data);
-    }
+    generate_key(flags, path, auth_token, keys);
 
     return PAM_SUCCESS;
 }
