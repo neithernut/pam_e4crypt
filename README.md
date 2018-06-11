@@ -14,6 +14,26 @@ to directories for which she previously set a "policy" matching her passphrase
 Note that the only encryption mode currently supported is aes256-xts.
 
 
+## Pitfalls
+
+Users should be aware of the following when using (or thinking about using) this
+module:
+
+ * Files and directories are usually cached by the kernel for performance
+   reasons. When using ext4 transparent encryption, decrypted content ends up
+   in those caches and may thus (still) be visible to users with sufficient
+   access rights (e.g. `root`) during or even after a session (until the caches
+   are cleared).
+ * Obviously, this module will only unlock files and directories if it will be
+   invoked, e.g. if PAM is used for login. Thus, background services can not
+   access encrypted files directories if the files are not unlocked (that's the
+   whole point of this module -- duh). TL;DR: don't complain about cronjobs
+   failing while trying to access encrypted files.
+ * Changing the password used for login does (currently) not change the
+   encryption key of affected directories. Hence, those directories will not be
+   unlocked after a password-change.
+
+
 ## Using this module
 
 This module should be invoked late during the authentication phase as well as
