@@ -10,7 +10,6 @@ find_package(PAM REQUIRED)
 
 find_package(Keyutils REQUIRED)
 find_package(OpenSSL REQUIRED)
-find_package(UUID REQUIRED)
 
 #
 # Build

@@ -81,10 +81,10 @@ You can generate this salt with one of the following commands :
 You can also store the salt outside your home directory in your pam config:
 
 ```
-auth        required        pam_e4crypt.so  saltpath=/home/.e4crypt
+auth        required        pam_e4crypt.so  saltpath=/home/.e4crypt/salt
 ```
 
-The module will then look for the salt in `/home/.e4crypt/$USER`
+The module will then look for the salt in `/home/.e4crypt/salt/$USER`
 
 ### Keyring
 
@@ -100,6 +100,20 @@ As `<desc>`, one may specify either a keyring's description or one of the
 "special values" understood by `keyctl` (1.5), e.g. `@u` for the user specific
 keyring.
 
+### Wrapped passphrases
+
+If you double encrypt the decryption password and salt, pam_e4crypt can automatically
+ensure your folder will still be decryptable when you change your password.
+
+A script is supplied which will walk you through initializing the files. You will
+require the following PAM config lines:
+
+```
+auth        required        pam_e4crypt.so wrappath=/home/.e4crypt/wrap saltpath=/home/.e4crypt/salt
+password    required        pam_e4crypt.so wrappath=/home/.e4crypt/wrap saltpath=/home/.e4crypt/salt
+session     required        pam_keyinit.so
+session     required        pam_e4crypt.so
+```
 
 ## Dependencies
 

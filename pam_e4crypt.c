@@ -12,13 +12,14 @@
 // this is a PAM module implementing authentication (kinda) and session setup
 #define PAM_SM_AUTH
 #define PAM_SM_SESSION
+#define PAM_SM_PASSWORD
 
 // std and system includes
 #include <fcntl.h>
-#include <mntent.h>
-#include <string.h>
 #include <sys/fsuid.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <dirent.h>
 #include <unistd.h>
 #include <syslog.h>
 #include <limits.h>
@@ -26,12 +27,10 @@
 #include <keyutils.h>
 
 // ext4 specific includes
-#include <ext2fs/ext2_fs.h>
 #include <ext2fs/ext2fs.h>
 
 // library includes
 #include <openssl/sha.h>
-#include <uuid/uuid.h>
 
 // PAM includes
 #include <security/pam_modules.h>
@@ -45,6 +44,7 @@
 #define EXT2FS_KEY_DESC_PREFIX_SIZE 5
 #define SHA512_LENGTH 64
 #define PAM_E4CRYPT_KEY_DATA "pam_e4crypt_key_data"
+#define EXT4_IOC_SET_ENCRYPTION_POLICY _IOR('f', 19, struct ext4_encryption_policy)
 
 
 /**
@@ -257,49 +257,21 @@ pbkdf2_sha512(
 
 
 /**
- * Generate a ref string from a key
- *
- * Originally ripped from e4crypt
+ * Generate a key
  */
 static
-void
-generate_key_ref_str(
-        char* key_ref_str, //!< output pointer
-        struct ext4_encryption_key* key //!< key for which to generate the ref
-) {
-    unsigned char key_ref1[SHA512_LENGTH];
-    unsigned char key_ref2[SHA512_LENGTH];
-    unsigned char key_desc[EXT4_KEY_DESCRIPTOR_SIZE];
-    int x;
-
-    SHA512(key->raw, EXT4_MAX_KEY_SIZE, key_ref1);
-    SHA512(key_ref1, SHA512_LENGTH, key_ref2);
-    memcpy(key_desc, key_ref2, EXT4_KEY_DESCRIPTOR_SIZE);
-    for (x = 0; x < EXT4_KEY_DESCRIPTOR_SIZE; ++x) {
-        sprintf(&key_ref_str[x * 2], "%02x", key_desc[x]);
-    }
-    key_ref_str[EXT4_KEY_REF_STR_BUF_SIZE - 1] = '\0';
-
-    memset(key_ref1, 0, sizeof(key_ref1));
-    memset(key_ref2, 0, sizeof(key_ref2));
-    memset(key_desc, 0, sizeof(key_desc));
-}
-
-
-/**
- * Generate a key and store it into the list
- */
-static
-void
+struct ext4_encryption_key
 generate_key(
         int flags,
         char* salt_path,
-        char* auth_token,
-        struct key_list* keys
+        char* auth_token
 ) {
+    struct ext4_encryption_key key = {0, {0}, 0};
+
     int fd = open(salt_path, O_RDONLY);
     if (fd == -1) {
-        return;
+        pam_log(LOG_WARNING, "Couldn't open salt file '%s'", salt_path);
+        return key;
     }
 
     char salt[EXT4_MAX_SALT_SIZE];
@@ -307,35 +279,176 @@ generate_key(
     close(fd);
 
     if (saltsize <= 0) {
-        return;
+        pam_log(LOG_WARNING, "Couldn't read salt from file '%s'", salt_path);
+        return key;
     }
 
-    struct ext4_encryption_key* key = key_list_alloc_key(keys);
-    if (!key) {
-        pam_log(LOG_WARNING, "Could not allocate space for key!");
-        goto clean_salt;
-    }
-    key->mode = EXT4_ENCRYPTION_MODE_AES_256_XTS;
-    key->size = EXT4_MAX_KEY_SIZE;
+    key.mode = EXT4_ENCRYPTION_MODE_AES_256_XTS;
+    key.size = EXT4_MAX_KEY_SIZE;
 
     pam_log(LOG_NOTICE, "Generating key with salt length %d from file '%s'", saltsize, salt_path);
-    pbkdf2_sha512(auth_token, salt, saltsize, EXT4_PBKDF2_ITERATIONS, key->raw);
-
-    // avoid duplicates in the key list
-    {
-        struct ext4_encryption_key* current_key = key;
-        while (current_key-- > keys->data)
-            if (memcmp(current_key, key, sizeof(*key)) == 0) {
-                key_list_pop(keys);
-                pam_log(LOG_NOTICE, "Found duplicate key");
-                goto clean_salt;
-            }
-    }
+    pbkdf2_sha512(auth_token, salt, saltsize, EXT4_PBKDF2_ITERATIONS, key.raw);
 
 clean_salt:
     memset(salt, 0, sizeof(salt));
+
+    return key;
 }
 
+/**
+ * Generate a key reference
+ */
+static
+struct ext4_encryption_key
+generate_key_from_wrapper(
+    int flags,
+    char* wrapper_path
+) {
+    char saltpath[PATH_MAX];
+    char authpath[PATH_MAX];
+    snprintf(saltpath, PATH_MAX, "%s/salt", wrapper_path);
+    snprintf(authpath, PATH_MAX, "%s/auth", wrapper_path);
+
+    struct ext4_encryption_key key = {0, {0}, 0};
+
+    int fd = open(authpath, O_RDONLY);
+    if (fd == -1) {
+        pam_log(LOG_WARNING, "Couldn't open auth token file '%s'", wrapper_path);
+        return key;
+    }
+
+    char authtok[EXT4_MAX_PASSPHRASE_SIZE + 1] = {0};
+    int authtoksize = read(fd, authtok, EXT4_MAX_PASSPHRASE_SIZE);
+    close(fd);
+
+    if (authtoksize <= 0) {
+        pam_log(LOG_WARNING, "Couldn't auth token from file '%s'", wrapper_path);
+        return key;
+    }
+
+    return generate_key(flags, saltpath, authtok);
+}
+
+static
+void
+key_get_key_ref(
+        struct ext4_encryption_key* key,
+        char* out
+) {
+    unsigned char key_ref1[SHA512_LENGTH] = {0};
+    unsigned char key_ref2[SHA512_LENGTH] = {0};
+
+    SHA512(key->raw, EXT4_MAX_KEY_SIZE, key_ref1);
+    SHA512(key_ref1, SHA512_LENGTH, key_ref2);
+    memcpy(out, key_ref2, EXT4_KEY_DESCRIPTOR_SIZE);
+
+    memset(key_ref1, 0, sizeof(key_ref1));
+    memset(key_ref2, 0, sizeof(key_ref2));
+}
+
+static
+long
+set_policy(
+    int flags,
+    char* path,
+    struct ext4_encryption_key* key
+) {
+    struct ext4_encryption_policy policy;
+
+    policy.version = 0;
+    policy.flags = 0; // TODO: Configure this? (What does it even do?)
+    policy.contents_encryption_mode =
+        EXT4_ENCRYPTION_MODE_AES_256_XTS;
+    policy.filenames_encryption_mode =
+        EXT4_ENCRYPTION_MODE_AES_256_CTS;
+
+    key_get_key_ref(key, &policy.master_key_descriptor[0]);
+
+    char key_ref_str[EXT4_KEY_REF_STR_BUF_SIZE] = {0};
+    for (int i = 0; i < EXT4_KEY_DESCRIPTOR_SIZE; ++i) {
+        sprintf(&key_ref_str[i * 2], "%02x", (unsigned char) policy.master_key_descriptor[i]);
+    }
+    key_ref_str[EXT4_KEY_REF_STR_BUF_SIZE - 1] = 0;
+
+    pam_log(LOG_NOTICE, "Setting policy for '%s' to '%s'", path, key_ref_str);
+
+    int fd = open(path, O_DIRECTORY);
+    if (fd == -1) {
+        pam_log(LOG_WARNING, "Couldn't open '%s'", path);
+        return -1;
+    }
+
+    long ret = ioctl(fd, EXT4_IOC_SET_ENCRYPTION_POLICY, &policy);
+    close(fd);
+    return ret;
+}
+
+static
+int
+rmrf(
+    int flags,
+    char* path
+) {
+    int ret = unlink(path);
+
+    if (ret == -1 && errno == EISDIR) {
+        struct dirent **namelist;
+        int n = scandir(path, &namelist, NULL, alphasort);
+        if (n < 0) {
+            pam_log(LOG_ERR, "Couldn't scan directory '%s' for removal", path);
+        } else {
+            char subpath[PATH_MAX] = {0};
+            while (n--) {
+                if (strcmp(namelist[n]->d_name, "..") == 0 || strcmp(namelist[n]->d_name, ".") == 0) {
+                    free(namelist[n]);
+                    continue;
+                }
+
+                snprintf(subpath, PATH_MAX, "%s/%s", path, namelist[n]->d_name);
+                free(namelist[n]);
+                subpath[PATH_MAX - 1] = 0;
+                rmrf(flags, subpath);
+            }
+            free(namelist);
+        }
+
+        ret = rmdir(path);
+    }
+
+    return ret;
+}
+
+/**
+ * Add a key to keyring
+ */
+static
+key_serial_t
+add_key_to_keyring(
+        int flags,
+        struct ext4_encryption_key* key,
+        key_serial_t keyring,
+        struct passwd const* pw
+) {
+    char key_ref_str[EXT2FS_KEY_DESC_PREFIX_SIZE + EXT4_KEY_REF_STR_BUF_SIZE];
+    strcpy(key_ref_str, EXT2FS_KEY_DESC_PREFIX);
+
+    unsigned char key_desc[EXT4_KEY_DESCRIPTOR_SIZE];
+    int x;
+
+    key_get_key_ref(key, key_desc);
+
+    for (x = 0; x < EXT4_KEY_DESCRIPTOR_SIZE; ++x) {
+        sprintf(&key_ref_str[EXT2FS_KEY_DESC_PREFIX_SIZE + (x * 2)], "%02x", key_desc[x]);
+    }
+    key_ref_str[EXT2FS_KEY_DESC_PREFIX_SIZE + EXT4_KEY_REF_STR_BUF_SIZE - 1] = 0;
+
+    memset(key_desc, 0, sizeof(key_desc));
+
+    pam_log(LOG_NOTICE, "Inserting key with reference %s as %d:%d",
+            key_ref_str, pw->pw_uid, pw->pw_gid);
+
+    return add_key(EXT2FS_KEY_TYPE_LOGON, key_ref_str, key, sizeof(*key), keyring);
+}
 
 
 // keyring retrieval
@@ -454,22 +567,63 @@ pam_sm_authenticate(
         pam_log(LOG_ERR, "error looking up user");
         return PAM_USER_UNKNOWN;
     }
-    char path[PATH_MAX];
-    snprintf(path, PATH_MAX, "%s/%s", pw->pw_dir, ".ext4_encryption_salt");
+    char saltpath[PATH_MAX];
+    char wrappath[PATH_MAX] = {0};
+    snprintf(saltpath, PATH_MAX, "%s/%s", pw->pw_dir, ".ext4_encryption_salt");
 
     for (int i = 0; i < argc; ++i) {
         char const* option;
 
         if (option = get_modarg_value("saltpath", argv[i])) {
             // If a custom saltpath has been passed, use it instead
-            int spchars = snprintf(path, PATH_MAX, "%s/%s", option, pw->pw_name);
+            int spchars = snprintf(saltpath, PATH_MAX, "%s/%s", option, pw->pw_name);
+            continue;
+        }
+
+        if (option = get_modarg_value("wrappath", argv[i])) {
+            // If a custom wrappath has been passed, we'll use that
+            snprintf(wrappath, PATH_MAX, "%s/%s", option, pw->pw_name);
             continue;
         }
 
         pam_log(LOG_WARNING, "Unknown option for authenticate: %s", argv[i]);
     }
 
-    generate_key(flags, path, auth_token, keys);
+    struct ext4_encryption_key* key = key_list_alloc_key(keys);
+    if (!key) {
+        pam_log(LOG_WARNING, "Could not allocate space for key!");
+        return PAM_AUTH_ERR;
+    }
+
+    *key = generate_key(flags, saltpath, auth_token);
+
+    if (strlen(wrappath)) {
+        key_serial_t wrapkeyid = add_key_to_keyring(flags, key, KEY_SPEC_SESSION_KEYRING, pw);
+        if (retval == -1) {
+            pam_log(LOG_WARNING, "Could not add wrapper key to keyring!");
+        }
+
+        pam_log(LOG_NOTICE, "Generating key from wrapper folder '%s'", wrappath);
+        *key = generate_key_from_wrapper(flags, wrappath);
+
+        // TODO: Remove wrapper key from keyring
+    }
+
+    if (key->size == 0) {
+        pam_log(LOG_NOTICE, "No key found");
+        key_list_pop(keys);
+        return PAM_SUCCESS;
+    }
+
+    // avoid duplicates in the key list
+    {
+        struct ext4_encryption_key* current_key = key;
+        while (current_key-- > keys->data)
+            if (memcmp(current_key, key, sizeof(*key)) == 0) {
+                key_list_pop(keys);
+                pam_log(LOG_NOTICE, "Found duplicate key");
+            }
+    }
 
     return PAM_SUCCESS;
 }
@@ -580,18 +734,11 @@ pam_sm_open_session(
         goto reset_fsgid;
     }
 
-    struct ext4_encryption_key* ext4_key = keys->data + keys->count;
-    while (ext4_key-- > keys->data) {
-        char key_ref_str[EXT2FS_KEY_DESC_PREFIX_SIZE + EXT4_KEY_REF_STR_BUF_SIZE];
-        strcpy(key_ref_str, EXT2FS_KEY_DESC_PREFIX);
-        generate_key_ref_str(key_ref_str + EXT2FS_KEY_DESC_PREFIX_SIZE,
-                ext4_key);
-        pam_log(LOG_NOTICE, "Inserting key with reference %s as %d:%d",
-                key_ref_str, pw->pw_uid, pw->pw_gid);
+    struct ext4_encryption_key* key = keys->data + keys->count;
+    while (key-- > keys->data) {
+        key_serial_t result = add_key_to_keyring(flags, key, keyring, pw);
 
-        key_serial_t key = add_key(EXT2FS_KEY_TYPE_LOGON, key_ref_str,
-                ext4_key, sizeof(*ext4_key), keyring);
-        if (key < 0) {
+        if (result < 0) {
             pam_log(LOG_ERR, "Could not add key: %s", strerror(errno));
             continue;
         }
@@ -629,7 +776,195 @@ pam_sm_close_session(
         int argc, ///< number of arguments passed to the module
         const char** argv ///< arguments passed to the module
 ) {
+    // TODO: Remove keys from keyring
     return PAM_SUCCESS;
 }
 
 
+/**
+ * Update the wrapped salt/passphrase for this
+ */
+PAM_EXTERN
+int
+pam_sm_chauthtok(
+        pam_handle_t * pamh,
+        int flags,
+        int argc,
+        const char **argv
+) {
+    char* auth_token = NULL;
+    char* old_auth_token = NULL;
+
+    int retval = pam_get_item(pamh, PAM_AUTHTOK, (const void**) &auth_token);
+    if ((retval != PAM_SUCCESS) || !auth_token) {
+        pam_log(LOG_ERR, "Failed to get auth token!");
+        return PAM_AUTHTOK_ERR;
+    }
+
+    retval = pam_get_item(pamh, PAM_OLDAUTHTOK, (const void**) &old_auth_token);
+    if ((retval != PAM_SUCCESS) || !auth_token) {
+        pam_log(LOG_ERR, "Failed to get old auth token!");
+        return PAM_AUTHTOK_RECOVERY_ERR;
+    }
+
+    const char *username;
+    retval = pam_get_item(pamh, PAM_USER, (void*) &username);
+    if (retval != PAM_SUCCESS)
+        return retval;
+    struct passwd const* pw = pam_modutil_getpwnam(pamh, username);
+    if (!pw) {
+        pam_log(LOG_ERR, "error looking up user");
+        return PAM_USER_UNKNOWN;
+    }
+    char saltpath[PATH_MAX];
+    char wrappath[PATH_MAX] = {0};
+    snprintf(saltpath, PATH_MAX, "%s/%s", pw->pw_dir, ".ext4_encryption_salt");
+
+    for (int i = 0; i < argc; ++i) {
+        char const* option;
+
+        if (option = get_modarg_value("saltpath", argv[i])) {
+            // If a custom saltpath has been passed, use it instead
+            snprintf(saltpath, PATH_MAX, "%s/%s", option, pw->pw_name);
+            continue;
+        }
+
+        if (option = get_modarg_value("wrappath", argv[i])) {
+            // If a custom wrappath has been passed, we'll use that
+            snprintf(wrappath, PATH_MAX, "%s/%s", option, pw->pw_name);
+            continue;
+        }
+
+        pam_log(LOG_WARNING, "Unknown option for authenticate: %s", argv[i]);
+    }
+
+    if (wrappath[0] == 0) {
+        pam_log(LOG_WARNING, "No wrappath supplied!");
+        return PAM_SUCCESS;
+    }
+
+    struct ext4_encryption_key oldkey = generate_key(flags, saltpath, old_auth_token);
+    add_key_to_keyring(flags, &oldkey, KEY_SPEC_SESSION_KEYRING, pw);
+
+    int ret = PAM_SUCCESS;
+
+    // Backup the old creds
+    char wrapbakpath[PATH_MAX];
+    snprintf(wrapbakpath, PATH_MAX, "%s.bak", wrappath);
+    rmrf(flags, wrapbakpath);
+    rename(wrappath, wrapbakpath);
+
+    char saltbakpath[PATH_MAX];
+    snprintf(saltbakpath, PATH_MAX, "%s.bak", saltpath);
+    rmrf(flags, saltbakpath);
+    rename(saltpath, saltbakpath);
+
+    // Generate file paths
+    char oldwrapauthpath[PATH_MAX];
+    char newwrapauthpath[PATH_MAX];
+    char oldwrapsaltpath[PATH_MAX];
+    char newwrapsaltpath[PATH_MAX];
+
+    snprintf(oldwrapauthpath, PATH_MAX, "%s/auth", wrapbakpath);
+    snprintf(newwrapauthpath, PATH_MAX, "%s/auth", wrappath);
+    snprintf(oldwrapsaltpath, PATH_MAX, "%s/salt", wrapbakpath);
+    snprintf(newwrapsaltpath, PATH_MAX, "%s/salt", wrappath);
+
+    // Some buffers
+    char saltbuf[EXT4_MAX_SALT_SIZE] = {0};
+    char passbuf[EXT4_MAX_PASSPHRASE_SIZE] = {0};
+
+    // Get file descriptors
+    int randfd = open("/dev/urandom", O_RDONLY);
+    int saltfd = creat(saltpath, 0740);
+
+    if (randfd == -1) {
+        pam_log(LOG_ERR, "Couldn't open /dev/urandom. You're screwed kid!");
+        goto error;
+    }
+
+    if (saltfd == -1) {
+        pam_log(LOG_ERR, "Couldn't open '%s'", saltpath);
+        goto error;
+    }
+
+    // Generate new salt
+    read(randfd, saltbuf, EXT4_MAX_SALT_SIZE);
+    write(saltfd, saltbuf, EXT4_MAX_SALT_SIZE);
+
+    // Set the new encrypted folder's policy
+    mkdir(wrappath, 0740);
+    struct ext4_encryption_key newkey = generate_key(flags, saltpath, auth_token);
+    add_key_to_keyring(flags, &newkey, KEY_SPEC_SESSION_KEYRING, pw);
+
+    retval = set_policy(flags, wrappath, &newkey);
+
+    if (retval == -1) {
+        pam_log(LOG_ERR, "Couldn't set policy for '%s', %d", wrappath, errno);
+        goto error;
+    }
+
+    int oldwrapauthfd = open(oldwrapauthpath, O_RDONLY);
+    int newwrapauthfd = creat(newwrapauthpath, 0740);
+    int oldwrapsaltfd = open(oldwrapsaltpath, O_RDONLY);
+    int newwrapsaltfd = creat(newwrapsaltpath, 0740);
+
+    if (oldwrapauthfd == -1) {
+        pam_log(LOG_ERR, "Couldn't open '%s'", oldwrapauthpath);
+        goto error;
+    }
+
+    if (newwrapauthfd == -1) {
+        pam_log(LOG_ERR, "Couldn't open '%s'", newwrapauthpath);
+        goto error;
+    }
+
+    if (oldwrapsaltfd == -1) {
+        pam_log(LOG_ERR, "Couldn't open '%s'", oldwrapsaltpath);
+        goto error;
+    }
+
+    if (newwrapsaltfd == -1) {
+        pam_log(LOG_ERR, "Couldn't open '%s'", newwrapsaltpath);
+        goto error;
+    }
+
+    // Copy wrapped auth/salt
+    retval = read(oldwrapauthfd, passbuf, EXT4_MAX_PASSPHRASE_SIZE);
+    write(newwrapauthfd, passbuf, retval);
+    retval = read(oldwrapsaltfd, saltbuf, EXT4_MAX_SALT_SIZE);
+    write(newwrapsaltfd, saltbuf, retval);
+
+    goto cleanup;
+
+error:
+    ret = PAM_AUTHTOK_ERR;
+cleanup:
+    close(randfd);
+    close(saltfd);
+    close(oldwrapauthfd);
+    close(newwrapauthfd);
+    close(oldwrapsaltfd);
+    close(newwrapsaltfd);
+
+    memset(saltbuf, 0, EXT4_MAX_SALT_SIZE);
+    memset(passbuf, 0, EXT4_MAX_PASSPHRASE_SIZE);
+    memset(&oldkey, 0, sizeof(oldkey));
+    memset(&newkey, 0, sizeof(newkey));
+
+    if (ret == PAM_SUCCESS) {
+        pam_log(LOG_NOTICE, "Removing backups '%s', '%s'", saltbakpath, wrapbakpath);
+        rmrf(flags, wrapbakpath);
+        rmrf(flags, saltbakpath);
+    } else {
+        pam_log(LOG_WARNING, "Restoring backups");
+        rmrf(flags, wrappath);
+        rmrf(flags, saltpath);
+        rename(wrapbakpath, wrappath);
+        rename(saltbakpath, saltpath);
+    }
+
+    // TODO: Remove keys from keyring afterwards
+
+    return ret;
+}
