@@ -71,20 +71,26 @@ encouraged making the module `optional` for that phase, at least initially.
 
 ### Salt
 
-User can have a specific salt stored in `$HOME/.ext4_encryption_salt`.
-You can generate this salt with one of the following commands :
+Users _must_ provide a 16-byte salt value for generation of a key. If no salt is
+supplied, no key will be generated. By default, the (raw) salt is read from
+`$HOME/.ext4_encryption_salt`. You can initialize this file with the following
+commands:
 
-``` echo -n `uuidgen` > ~/.ext4_encryption_salt ```
+```head -c 16 /dev/urandom > ~/.ext4_encryption_salt```
 
-``` echo -n s:`head -c 16 /dev/urandom | xxd -p` > ~/.ext4_encryption_salt ```
-
-You can also store the salt outside your home directory in your pam config:
+Alternatively, the module can be configured to read the salt from files in a
+dedicated directory using the `saltpath` parameter:
 
 ```
 auth        required        pam_e4crypt.so  saltpath=/home/.e4crypt
 ```
 
-The module will then look for the salt in `/home/.e4crypt/$USER`
+The module will then read the salt from `/home/.e4crypt/$USER`
+
+Note that the `e4crypt` will read salt from various places by default. When
+using the `e4crypt add_key` command, specify the intended user's salt via the
+`-S` option for compatibility with this module.
+
 
 ### Keyring
 
