@@ -13,6 +13,10 @@ to directories for which she previously set a "policy" matching her passphrase
 
 Note that the only encryption mode currently supported is aes256-xts.
 
+Google's [fscrypt](https://github.com/google/fscrypt) has the same purpose but
+is not restricted to ext4's transparent encryption feature and far better
+maintained. Thus, fscrypt is probably better suited for production machines.
+
 
 ## Pitfalls
 
