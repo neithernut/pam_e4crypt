@@ -299,6 +299,7 @@ generate_key(
 ) {
     int fd = open(salt_path, O_RDONLY);
     if (fd == -1) {
+        pam_log(LOG_WARNING, "Could not open salt file '%s': %s", salt_path, strerror(errno));
         return;
     }
 
@@ -307,6 +308,7 @@ generate_key(
     close(fd);
 
     if (saltsize <= 0) {
+        pam_log(LOG_WARNING, "Failed to read salt from '%s'!", salt_path);
         return;
     }
 
