@@ -118,7 +118,6 @@ At runtime, the module requires:
  * PAM
  * keyutils
  * OpenSSL (or some compatible replacement like libressl)
- * libuuid (util-linux)
 
 At build time, the developer-packages for all the runtime-dependencies are
 required in addition to:

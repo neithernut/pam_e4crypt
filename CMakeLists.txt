@@ -19,7 +19,7 @@ find_package(OpenSSL REQUIRED)
 set(CMAKE_SHARED_MODULE_PREFIX "")
 
 add_library(pam_e4crypt MODULE pam_e4crypt.c)
-target_link_libraries(pam_e4crypt pam keyutils OpenSSL::Crypto uuid)
+target_link_libraries(pam_e4crypt pam keyutils OpenSSL::Crypto)
 
 # install the module in the same place where all the other modules should be
 # NOTE: we actually disrespect the install prefix here
