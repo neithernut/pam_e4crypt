@@ -75,8 +75,8 @@ encouraged making the module `optional` for that phase, at least initially.
 
 ### Salt
 
-Users _must_ provide a 16-byte salt value for generation of a key. If no salt is
-supplied, no key will be generated. By default, the (raw) salt is read from
+Users _must_ provide a salt (up to 16 bytes) for generation of a key. If no salt
+is supplied, no key will be generated. By default, the (raw) salt is read from
 `$HOME/.ext4_encryption_salt`. You can initialize this file with the following
 commands:
 
