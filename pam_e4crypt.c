@@ -2,7 +2,7 @@
  * pam_e4crypt
  * Copyright Julian Ganz <neither@nut.email>
  *
- * This file is part of pam_mount; you can redistribute it and/or
+ * This file is part of pam_e4crypt; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
  * as published by the Free Software Foundation; either version 2
  * of the License, or (at your option) any later version.
