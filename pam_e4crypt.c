@@ -444,7 +444,15 @@ pam_sm_authenticate(
         return PAM_AUTH_ERR;
     }
     key_list_init(keys);
-    pam_set_data(pamh, PAM_E4CRYPT_KEY_DATA, keys, key_list_pam_cleanup);
+    retval = pam_set_data(pamh, PAM_E4CRYPT_KEY_DATA, keys, key_list_pam_cleanup);
+    if (retval != PAM_SUCCESS) {
+        pam_log(
+            LOG_ERR,
+            "Failed to store key list for session: %s",
+            pam_strerror(pamh, retval));
+        key_list_pam_cleanup(pamh, keys, retval);
+        return PAM_SESSION_ERR;
+    }
 
     // First read a salt define in a fixed place in the HOME directory
     const char *username;
@@ -541,7 +549,10 @@ pam_sm_open_session(
     struct key_list* keys = NULL;
     retval = pam_get_data(pamh, PAM_E4CRYPT_KEY_DATA, (const void**) &keys);
     if ((retval != PAM_SUCCESS) || !keys) {
-        pam_log(LOG_ERR, "Failed to retrieve key list!");
+        pam_log(
+            LOG_ERR,
+            "Failed to retrieve key list: %s",
+            pam_strerror(pamh, retval));
         return PAM_SESSION_ERR;
     }
 
