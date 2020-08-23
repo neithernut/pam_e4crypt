@@ -1,0 +1,8 @@
+#!/bin/sh
+exec qemu-system-x86_64 \
+    -drive file=pam_e4test_image,if=virtio,media=disk,format=raw \
+    -nic user,model=virtio-net-pci \
+    -nographic \
+    -no-reboot \
+    -kernel bzImage -append 'root=/dev/vda panic=10 console=ttyS0 init=/bin/sh rw' \
+
