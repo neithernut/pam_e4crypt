@@ -1,0 +1,10 @@
+auth        required    pam_unix.so debug
+auth        required    pam_e4crypt.so debug saltpath=/etc/pam_e4crypt/testsalt
+
+account     required    pam_unix.so debug
+
+password    required    pam_unix.so debug use_authtok shadow
+
+session     required    pam_keyinit.so debug
+session     required    pam_unix.so debug
+session     required    pam_e4crypt.so debug
