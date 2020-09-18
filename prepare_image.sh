@@ -40,6 +40,9 @@ echo "Adding test files..." 1>&2
 mkdir "$ROOTFS_DIR/etc/pam.d"
 cp pam.d/test "$ROOTFS_DIR/etc/pam.d"
 
+cp scripts/test_secret.sh "$ROOTFS_DIR/usr/local/bin"
+chmod +x "$ROOTFS_DIR/usr/local/bin/test_secret.sh"
+
 mkdir "$ROOTFS_DIR/etc/pam_e4crypt"
 head -c 16 /dev/urandom > "$ROOTFS_DIR/etc/pam_e4crypt/testsalt"
 

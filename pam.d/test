@@ -8,3 +8,4 @@ password    required    pam_unix.so debug use_authtok shadow
 session     required    pam_keyinit.so debug
 session     required    pam_unix.so debug
 session     required    pam_e4crypt.so debug
+session     required    pam_exec.so debug stdout test_secret.sh
