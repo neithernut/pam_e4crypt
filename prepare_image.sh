@@ -31,8 +31,9 @@ test1:`$CRYPTPW_IMPL foo`:1000:100:PAM test user 1,,,:/home/test1:/sbin/nologin
 test2:`$CRYPTPW_IMPL bar`:1001:100:PAM test user 2,,,:/home/test2:/sbin/nologin
 EOF
 mkdir "$ROOTFS_DIR/home/test"{1,2}
-chown 1000:100 "$ROOTFS_DIR/home/test1"
-chown 1001:100 "$ROOTFS_DIR/home/test2"
+mkdir "$ROOTFS_DIR/home/test"{1,2}/secrets
+chown -R 1000:100 "$ROOTFS_DIR/home/test1"
+chown -R 1001:100 "$ROOTFS_DIR/home/test2"
 
 
 echo "Adding test files..." 1>&2

@@ -40,6 +40,13 @@ EOF
 ln -fs /sbin/halt /sbin/poweroff
 
 
+echo "Setting policies on secret directories..." 1>&2
+echo "foo" | e4crypt add_key -v -S /etc/pam_e4crypt/testsalt /home/test1/secrets
+echo "secret data" > /home/test1/secrets/file
+echo "bar" | e4crypt add_key -v -S /etc/pam_e4crypt/testsalt /home/test2/secrets
+echo "secret data" > /home/test2/secrets/file
+
+
 echo "Clearing /tmp..." 1>&2
 rm -rf /tmp/*
 
